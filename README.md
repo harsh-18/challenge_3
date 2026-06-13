@@ -58,3 +58,8 @@ challenge_3/
 1. **Zero Hardcoded Secrets**: All keys are fetched from Google Cloud Secret Manager or local `.env` (excluded from git).
 2. **Authenticated APIs**: FastAPI routes are protected by a middleware that verifies JWT identity tokens minted by Firebase Authentication.
 3. **IAM Roles**: The Cloud Run service operates under a custom service account with minimal IAM permissions (strictly Firestore read/write, Secret Manager secret accessor, and Vertex AI user).
+
+---
+
+## 4. License
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
