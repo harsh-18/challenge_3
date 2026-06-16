@@ -14,7 +14,7 @@ except ImportError:
 
 class GeminiService:
     def __init__(self):
-        self.mock_mode = settings.USE_MOCK_SERVICES or not GENAI_AVAILABLE or not settings.GEMINI_API_KEY
+        self.mock_mode = settings.USE_MOCK_SERVICES or not GENAI_AVAILABLE or (not settings.GEMINI_API_KEY and settings.ENV != "production")
         self.client = None
         if not self.mock_mode:
             try:
@@ -23,7 +23,7 @@ class GeminiService:
                 if settings.GEMINI_API_KEY:
                     self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
                 else:
-                    self.client = genai.Client()
+                    self.client = genai.Client(vertexai=True, project=settings.PROJECT_ID, location="us-central1")
             except Exception as e:
                 print(f"Error initializing real Gemini Client: {e}. Falling back to mock mode.")
                 self.mock_mode = True

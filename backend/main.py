@@ -1,6 +1,6 @@
 import time
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, Depends, HTTPException, status, Header, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, status, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -71,6 +71,22 @@ class ChatMessageRequest(BaseModel):
     session_id: str = Field(..., description="Chat session identifier.")
 
 # --- API ENDPOINTS ---
+
+@app.get("/")
+def read_root():
+    return {
+        "message": "Welcome to EcoSphere AI API",
+        "status": "operational",
+        "documentation": "/docs"
+    }
+
+@app.get("/api")
+@app.get("/api/")
+def api_root():
+    return {
+        "message": "EcoSphere AI API Gateway",
+        "status": "operational"
+    }
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 def health_check():

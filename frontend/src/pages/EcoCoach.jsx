@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Leaf, Send, Sparkles, User, Info } from 'lucide-react';
+import { Leaf, Send } from 'lucide-react';
 import { authService } from '../firebase';
 
 function EcoCoach({ user }) {

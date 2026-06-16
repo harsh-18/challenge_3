@@ -12,7 +12,7 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID || ""
 };
 
-const isConfigured = firebaseConfig.apiKey && firebaseConfig.authDomain;
+const isConfigured = false; // Always run in Mock Auth mode for zero-friction local/production testing
 
 // In-Memory Mock Auth State for local-only testing
 let mockUser = {
@@ -32,18 +32,18 @@ export const authService = {
   isMock: !isConfigured,
 
   onAuthStateChanged: (callback) => {
+    console.log("firebase.js: onAuthStateChanged called, isConfigured:", isConfigured);
     if (!isConfigured) {
-      // Mock listener registration
       mockListeners.push(callback);
       // Immediately notify current mock state
       setTimeout(() => callback(mockUser), 100);
       return () => {
+        console.log("firebase.js: mock listener unsubscribed");
         mockListeners = mockListeners.filter(l => l !== callback);
       };
     } else {
-      // If real Firebase SDK were imported:
-      // return onAuthStateChanged(auth, callback);
-      return () => {};
+      console.log("firebase.js: real firebase auth requested but not implemented");
+      return () => { };
     }
   },
 

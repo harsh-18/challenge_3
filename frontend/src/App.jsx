@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Leaf, LogOut, LayoutDashboard, MessageSquareText, FileCheck, Compass, Sparkles } from 'lucide-react';
+import { Leaf, LogOut, LayoutDashboard, MessageSquareText, FileCheck } from 'lucide-react';
 import { authService } from './firebase';
 import Dashboard from './pages/Dashboard';
 import EcoCoach from './pages/EcoCoach';

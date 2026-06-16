@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileText, CheckCircle2, AlertCircle, Sparkles, Image, RefreshCw, BarChart2 } from 'lucide-react';
+import { UploadCloud, FileText, CheckCircle2, AlertCircle, Sparkles, RefreshCw, BarChart2 } from 'lucide-react';
 import { authService } from '../firebase';
 
 function ReceiptUpload({ user }) {
