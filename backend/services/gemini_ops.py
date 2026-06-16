@@ -1,5 +1,6 @@
 import json
 import re
+import unicodedata
 from typing import List, Dict, Any, Optional
 from backend.config import settings
 from backend.services.carbon_calc import calculate_footprint
@@ -12,18 +13,34 @@ try:
 except ImportError:
     GENAI_AVAILABLE = False
 
+def _sanitize_text(text: str) -> str:
+    """Remove BOM characters and other invisible Unicode that break API calls."""
+    if not text:
+        return text
+    # Strip BOM (\ufeff) and other zero-width chars
+    text = text.replace('\ufeff', '').replace('\ufffe', '')
+    text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '')
+    return text.strip()
+
+
 class GeminiService:
+    # Use the latest model that works with google-genai SDK
+    MODEL_FLASH = 'gemini-2.0-flash'
+    MODEL_PRO = 'gemini-2.0-flash'  # Use flash for all — fast + capable
+    MODEL_EMBEDDING = 'text-embedding-004'
+
     def __init__(self):
         self.mock_mode = settings.USE_MOCK_SERVICES or not GENAI_AVAILABLE or (not settings.GEMINI_API_KEY and settings.ENV != "production")
         self.client = None
         if not self.mock_mode:
             try:
                 # Initialize Google GenAI client
-                # If API Key is provided, use it, otherwise rely on Application Default Credentials (ADC)
-                if settings.GEMINI_API_KEY:
-                    self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                api_key = _sanitize_text(settings.GEMINI_API_KEY)
+                if api_key:
+                    self.client = genai.Client(api_key=api_key)
                 else:
                     self.client = genai.Client(vertexai=True, project=settings.PROJECT_ID, location="us-central1")
+                print(f"Gemini client initialized successfully. Model: {self.MODEL_FLASH}")
             except Exception as e:
                 print(f"Error initializing real Gemini Client: {e}. Falling back to mock mode.")
                 self.mock_mode = True
@@ -55,7 +72,7 @@ class GeminiService:
         """
         try:
             response = self.client.models.generate_content(
-                model='gemini-1.5-pro',
+                model=self.MODEL_PRO,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -120,7 +137,7 @@ class GeminiService:
                 prompt
             ]
             response = self.client.models.generate_content(
-                model='gemini-1.5-flash',
+                model=self.MODEL_FLASH,
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -153,47 +170,83 @@ class GeminiService:
     def generate_coaching_response(self, message: str, chat_history: List[Dict[str, str]], tips: List[str], current_score_kg: float) -> str:
         """
         Generates conversational eco-coaching responses utilizing injected RAG tips.
+        Uses a comprehensive system prompt to be culturally aware, context-sensitive,
+        and give genuinely helpful sustainability advice.
         """
         if self.mock_mode:
             return self._mock_coaching_response(message, tips, current_score_kg)
 
+        # Sanitize all inputs to prevent BOM/encoding issues
+        message = _sanitize_text(message)
+        tips = [_sanitize_text(t) for t in tips]
+
         # Structure chat history for Gemini
         formatted_history = []
-        for turn in chat_history[-6:]: # Keep last 6 turns for context
+        for turn in chat_history[-6:]:
             role = "user" if turn["role"] == "user" else "model"
-            formatted_history.append(f"{role.capitalize()}: {turn['content']}")
+            content = _sanitize_text(turn.get('content', ''))
+            formatted_history.append(f"{role.capitalize()}: {content}")
         
-        history_str = "\n".join(formatted_history)
-        tips_str = "\n".join([f"- {tip}" for tip in tips])
+        history_str = "\n".join(formatted_history) if formatted_history else "(No prior conversation)"
+        tips_str = "\n".join([f"- {tip}" for tip in tips]) if tips else "(No specific tips retrieved)"
 
-        prompt = f"""
-        You are "Eco-Coach", a friendly, encouraging AI sustainability assistant.
-        Your goal is to guide the user in lowering their carbon footprint using simple, practical tips.
+        system_prompt = _sanitize_text("""
+You are "Eco-Coach", an intelligent, empathetic AI sustainability assistant for the EcoSphere AI platform.
 
-        Context:
-        - User's Current Daily/Weekly Carbon Footprint: {current_score_kg} kg CO2e.
-        - Relevant Environmental Tips retrieved for this query:
-        {tips_str}
+CORE PERSONALITY:
+- Warm, encouraging, knowledgeable, and non-judgmental
+- You give SPECIFIC, ACTIONABLE advice — never generic platitudes
+- You ALWAYS answer the user's actual question directly before offering additional tips
+- You are culturally sensitive and globally aware
 
-        Recent Chat History:
-        {history_str}
+CRITICAL RULES:
+1. CULTURAL & DIETARY AWARENESS: Pay close attention to ANY cultural, religious, or dietary cues in the conversation. If a user mentions being Hindu, Muslim, Jewish, Buddhist, Jain, vegan, vegetarian, or any other identity — NEVER suggest foods that conflict with their beliefs. For example:
+   - Hindu users: Do NOT suggest beef or cow-related products
+   - Muslim/Jewish users: Do NOT suggest pork
+   - Vegan users: Do NOT suggest any animal products
+   - Jain users: Do NOT suggest root vegetables or any animal products
+   Instead, suggest culturally appropriate plant-based alternatives.
 
-        User message: "{message}"
+2. CONTEXT-AWARENESS: Read the ENTIRE chat history carefully. Remember what the user has told you. Don't repeat yourself. Don't re-introduce yourself mid-conversation.
 
-        Response Guidelines:
-        1. Be supportive, friendly, and actionable. Don't sound lecturing or judgmental.
-        2. Reference the user's carbon score if it makes sense in context.
-        3. Seamlessly weave in the provided environmental tips to give highly personalized, grounded advice.
-        4. Keep your answer conversational, concise, and structured with bullet points where appropriate.
-        """
+3. DIRECT ANSWERS: If the user asks a specific question (e.g., "Is driving an EV eco-friendly?"), give a direct, well-reasoned answer with data/facts — don't dodge with generic tips.
+
+4. PERSONALIZATION: Use the user's carbon footprint score when relevant, but don't force it into every response.
+
+5. FORMAT: Use markdown formatting (bold, bullet points) for readability. Keep responses concise (3-6 sentences + bullets if needed). Don't write essays.
+
+6. NO CANNED INTROS: Don't start every message with "Hello! I am your Eco-Coach". Only introduce yourself on the very first message of a conversation.
+""")
+
+        user_prompt = _sanitize_text(f"""CONTEXT:
+- User's tracked carbon footprint: {current_score_kg} kg CO2e
+- Relevant sustainability tips from our knowledge base:
+{tips_str}
+
+CONVERSATION HISTORY:
+{history_str}
+
+CURRENT USER MESSAGE: {message}
+
+Respond naturally and helpfully. Remember: answer their question FIRST, then offer 2-3 specific tips if appropriate.""")
+
         try:
             response = self.client.models.generate_content(
-                model='gemini-1.5-flash',
-                contents=prompt
+                model=self.MODEL_FLASH,
+                contents=[
+                    types.Content(role="user", parts=[types.Part.from_text(text=system_prompt + "\n\n" + user_prompt)])
+                ],
+                config=types.GenerateContentConfig(
+                    temperature=0.7,
+                    top_p=0.9,
+                    max_output_tokens=800
+                )
             )
             return response.text
         except Exception as e:
             print(f"Error calling Eco-Coach Gemini API: {e}. Falling back to mock response.")
+            import traceback
+            traceback.print_exc()
             return self._mock_coaching_response(message, tips, current_score_kg)
 
     # --- MOCK IMPLEMENTATIONS ---
@@ -403,26 +456,35 @@ class GeminiService:
             }
 
     def _mock_coaching_response(self, message: str, tips: List[str], current_score_kg: float) -> str:
+        """Improved mock response that's at least category-aware and doesn't give canned intros."""
         msg_lower = message.lower()
         
         tips_bullets = "\n".join([f"• {tip}" for tip in tips])
         if not tips:
             tips_bullets = "• Switch off appliances at the socket to eliminate standby energy loss.\n• Take public transport, cycle, or walk for journeys under 5 km.\n• Incorporate more plant-based days into your weekly diet."
+        
+        # EV-specific question
+        if "ev" in msg_lower or "electric vehicle" in msg_lower or "electric car" in msg_lower:
+            return f"Great question! **Yes, EVs are significantly more eco-friendly** than internal combustion engine vehicles over their lifetime, even accounting for battery production and electricity generation:\n\n• An average EV produces **50-70% fewer lifecycle CO2 emissions** than a petrol car.\n• The carbon footprint decreases further if your electricity grid uses renewables.\n• Battery manufacturing does have an upfront carbon cost (~6-8 tonnes CO2), but this is offset within 1.5-2 years of driving.\n• EVs also eliminate tailpipe NOx and particulate emissions, improving local air quality.\n\n**Pro tip:** If you charge during off-peak hours when grid demand is low, your carbon impact is even smaller. Your current footprint is **{current_score_kg} kg CO2e**."
+
+        # Greeting — only respond to pure greetings, not words containing 'hi'
+        if msg_lower.strip() in ["hello", "hi", "hey", "hi there", "hello there", "hey there"]:
+            return f"Hello! I'm your **Eco-Coach** 🌿. I'm here to help you log activities, estimate carbon impact, and discover practical lifestyle changes.\n\nYour current tracked footprint is **{current_score_kg} kg CO2e**. What would you like to explore today?"
+
+        if "log" in msg_lower or "carbon" in msg_lower or "score" in msg_lower or "footprint" in msg_lower:
+            return f"Your current tracked footprint is **{current_score_kg} kg CO2e**. Here are personalized tips to help reduce it further:\n\n{tips_bullets}\n\nWould you like specific advice on transit, food, or energy?"
+
+        if any(w in msg_lower for w in ["transit", "travel", "car", "drive", "commute", "flight", "fly"]):
+            return f"Transportation is often the **largest contributor** to personal carbon emissions. Here's what the data shows:\n\n• **Public transit** emits 45-80% less CO2 per km than solo driving.\n• **Carpooling** with just one other person cuts your per-trip emissions in half.\n• For flights, **economy class** produces ~50% less emissions per passenger than business class.\n• Even eco-driving habits (smooth acceleration, proper tire pressure) can cut fuel use by 15-20%.\n\nYour current score is **{current_score_kg} kg CO2e**. Small shifts in how you commute can make a big difference!"
             
-        if "hello" in msg_lower or "hi" in msg_lower:
-            return f"Hello! I am your **Eco-Coach** 🌿. I'm here to help you log and reduce your daily carbon footprint. Your current footprint is **{current_score_kg} kg CO2e**. What would you like to log or ask about today?"
+        if any(w in msg_lower for w in ["food", "diet", "eat", "meal", "cooking", "grocery"]):
+            return f"Food choices have a huge impact on your carbon footprint! Here are evidence-based strategies:\n\n• **Plant-based meals** produce 50-90% fewer emissions than meat-heavy ones.\n• **Seasonal, local produce** cuts emissions from refrigerated transport and storage.\n• **Reducing food waste** is one of the top climate solutions — plan meals ahead and use leftovers creatively.\n• Legumes (lentils, chickpeas, beans) are protein-rich with a fraction of the carbon cost of meat.\n\nYour footprint is currently **{current_score_kg} kg CO2e**. Even swapping 2-3 meals a week to plant-based can make a measurable dent!"
 
-        if "log" in msg_lower or "carbon" in msg_lower or "score" in msg_lower:
-            return f"Your current tracked footprint is **{current_score_kg} kg CO2e**. Based on your activities, here are some customized tips you can follow to lower this:\n\n{tips_bullets}\n\nDo you want me to suggest specific alternatives for transit, food, or energy?"
+        if any(w in msg_lower for w in ["energy", "electricity", "power", "bill", "appliance", "ac", "heating", "cooling"]):
+            return f"Home energy use is a great area for quick wins! Here's what works:\n\n• **LED bulbs** use 85% less energy than incandescent — swap them first.\n• **Unplug electronics** when not in use; standby power is 5-10% of your bill.\n• Set your AC 1-2°C higher in summer (or lower in winter) to reduce HVAC energy by ~10%.\n• **Cold water laundry** saves 90% of the energy a washing machine uses.\n\nYour tracked footprint: **{current_score_kg} kg CO2e**. These changes often save money too!"
 
-        if "transit" in msg_lower or "travel" in msg_lower or "car" in msg_lower or "drive" in msg_lower:
-            return f"Transit is typically one of the highest contributors to personal carbon emissions! With your current score of **{current_score_kg} kg CO2e**, here is what you can do:\n\n• For shorter distances, consider walking, cycling, or using public metro systems.\n• If driving, carpooling or driving in eco-mode can cut emissions by up to 20%.\n• If possible, plan flights efficiently and opt for economy class over business to halve the per-passenger emission factor."
-            
-        if "eat" in msg_lower or "food" in msg_lower or "diet" in msg_lower:
-            return f"Food is a great area for quick wins! \n\n• Replacing just one beef meal per week with a chicken, vegetarian, or vegan option cuts that meal's emissions by 75-90%.\n• Reducing food waste helps minimize landfill methane emissions.\n• Try buying local and seasonal produce to limit emissions from transit and refrigerated storage."
-
-        # General response
-        return f"That's a great question! Reducing our footprint is about small, consistent choices. Here are some relevant recommendations based on your sustainability goals:\n\n{tips_bullets}\n\nHow else can I help you today?"
+        # General/unknown topic — give a thoughtful response
+        return f"That's a thoughtful question! Here are some relevant insights based on sustainability research:\n\n{tips_bullets}\n\nYour current tracked footprint is **{current_score_kg} kg CO2e**. Every small change compounds over time — what specific area would you like to dive deeper into?"
 
 # Singleton Instance
 gemini_service = GeminiService()

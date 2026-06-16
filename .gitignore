@@ -14,10 +14,17 @@ venv/
 env/
 .pytest_cache/
 
-# Environment variables
+# Environment variables - NEVER commit these
 .env
+.env.*
 .env.local
+.env.production
+.env.staging
+.env.development
 .env.*.local
+backend/.env
+frontend/.env
+frontend/.env.*
 
 # IDEs and editors
 .vscode/
