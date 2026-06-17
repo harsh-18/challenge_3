@@ -1,7 +1,14 @@
 // Firebase Auth Mock or Real integration wrapper
-// To enable real Firebase, populate variables in a .env.local file:
-// VITE_FIREBASE_API_KEY=your_api_key
-// VITE_FIREBASE_AUTH_DOMAIN=your_auth_domain
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut as firebaseSignOut,
+  onAuthStateChanged as firebaseOnAuthStateChanged
+} from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
@@ -12,7 +19,22 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID || ""
 };
 
-const isConfigured = false; // Always run in Mock Auth mode for zero-friction local/production testing
+// Enable real Firebase Auth if API key is present and not a placeholder
+const isConfigured = !!(firebaseConfig.apiKey && firebaseConfig.apiKey !== "your_api_key");
+
+let app;
+let auth;
+let googleProvider;
+
+if (isConfigured) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    googleProvider = new GoogleAuthProvider();
+  } catch (error) {
+    console.error("Error initializing real Firebase:", error);
+  }
+}
 
 // In-Memory Mock Auth State for local-only testing
 let mockUser = {
@@ -33,7 +55,9 @@ export const authService = {
 
   onAuthStateChanged: (callback) => {
     console.log("firebase.js: onAuthStateChanged called, isConfigured:", isConfigured);
-    if (!isConfigured) {
+    if (isConfigured && auth) {
+      return firebaseOnAuthStateChanged(auth, callback);
+    } else {
       mockListeners.push(callback);
       // Immediately notify current mock state
       setTimeout(() => callback(mockUser), 100);
@@ -41,15 +65,14 @@ export const authService = {
         console.log("firebase.js: mock listener unsubscribed");
         mockListeners = mockListeners.filter(l => l !== callback);
       };
-    } else {
-      console.log("firebase.js: real firebase auth requested but not implemented");
-      return () => { };
     }
   },
 
   signInWithEmail: async (email, password) => {
-    if (!isConfigured) {
-      // Mock log in
+    if (isConfigured && auth) {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      return userCredential.user;
+    } else {
       return new Promise((resolve) => {
         setTimeout(() => {
           mockUser = {
@@ -63,11 +86,13 @@ export const authService = {
         }, 600);
       });
     }
-    // Real implementation would call signInWithEmailAndPassword
   },
 
   signUpWithEmail: async (email, password) => {
-    if (!isConfigured) {
+    if (isConfigured && auth) {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      return userCredential.user;
+    } else {
       return new Promise((resolve) => {
         setTimeout(() => {
           mockUser = {
@@ -84,7 +109,10 @@ export const authService = {
   },
 
   signInWithGoogle: async () => {
-    if (!isConfigured) {
+    if (isConfigured && auth && googleProvider) {
+      const userCredential = await signInWithPopup(auth, googleProvider);
+      return userCredential.user;
+    } else {
       return new Promise((resolve) => {
         setTimeout(() => {
           mockUser = {
@@ -101,7 +129,9 @@ export const authService = {
   },
 
   signOut: async () => {
-    if (!isConfigured) {
+    if (isConfigured && auth) {
+      await firebaseSignOut(auth);
+    } else {
       return new Promise((resolve) => {
         setTimeout(() => {
           mockUser = null;
@@ -113,11 +143,10 @@ export const authService = {
   },
 
   getAuthToken: async () => {
-    if (!isConfigured) {
-      // In mock mode, the mock uid is passed as the token directly
-      return mockUser ? mockUser.uid : "";
+    if (isConfigured && auth && auth.currentUser) {
+      return await auth.currentUser.getIdToken();
+    } else {
+      return mockUser ? mockUser.uid : "mock-user-123";
     }
-    // Real Firebase: return await auth.currentUser.getIdToken()
-    return "mock-user-123";
   }
 };

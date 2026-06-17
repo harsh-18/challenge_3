@@ -93,9 +93,18 @@ def health_check():
     """
     Standard health check endpoint.
     """
+    # Determine active LLM provider
+    if gemini_service.client:
+        llm_provider = "gemini"
+    elif gemini_service.groq_client:
+        llm_provider = "groq"
+    else:
+        llm_provider = "mock"
+    
     return {
         "status": "healthy",
         "mock_mode": settings.USE_MOCK_SERVICES,
+        "llm_provider": llm_provider,
         "environment": settings.ENV,
         "gcp_project": settings.PROJECT_ID,
         "uptime_sec": round(time.time() - START_TIME, 2)

@@ -13,6 +13,13 @@ try:
 except ImportError:
     GENAI_AVAILABLE = False
 
+# Try importing Groq SDK (fallback LLM provider)
+try:
+    from groq import Groq
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+
 def _sanitize_text(text: str) -> str:
     """Remove BOM characters and other invisible Unicode that break API calls."""
     if not text:
@@ -23,32 +30,110 @@ def _sanitize_text(text: str) -> str:
     return text.strip()
 
 
+def _extract_bold_key(text: str) -> str:
+    """Safely extract the first **bold** keyword from a string for deduplication.
+    Returns the bold content lowercased, or the first 40 chars of the string if no bold markers exist."""
+    parts = text.split("**")
+    if len(parts) >= 2:
+        return parts[1].lower()
+    return text[:40].lower()
+
+
 class GeminiService:
     # Use the latest model that works with google-genai SDK
     MODEL_FLASH = 'gemini-2.0-flash'
     MODEL_PRO = 'gemini-2.0-flash'  # Use flash for all — fast + capable
     MODEL_EMBEDDING = 'text-embedding-004'
+    
+    # Groq fallback model (fast Llama inference)
+    GROQ_MODEL = 'llama-3.3-70b-versatile'
 
     def __init__(self):
-        self.mock_mode = settings.USE_MOCK_SERVICES or not GENAI_AVAILABLE or (not settings.GEMINI_API_KEY and settings.ENV != "production")
-        self.client = None
-        if not self.mock_mode:
+        self.client = None         # Gemini client
+        self.groq_client = None    # Groq fallback client
+        self.mock_mode = settings.USE_MOCK_SERVICES
+        self.using_groq = False    # Track which provider is active
+        
+        # Priority 1: Try Gemini
+        if not self.mock_mode and GENAI_AVAILABLE and (settings.GEMINI_API_KEY or settings.ENV == "production"):
             try:
-                # Initialize Google GenAI client
                 api_key = _sanitize_text(settings.GEMINI_API_KEY)
                 if api_key:
                     self.client = genai.Client(api_key=api_key)
                 else:
                     self.client = genai.Client(vertexai=True, project=settings.PROJECT_ID, location="us-central1")
-                print(f"Gemini client initialized successfully. Model: {self.MODEL_FLASH}")
+                print(f"✅ Gemini client initialized. Model: {self.MODEL_FLASH}")
             except Exception as e:
-                print(f"Error initializing real Gemini Client: {e}. Falling back to mock mode.")
-                self.mock_mode = True
+                print(f"⚠️ Gemini init failed: {e}")
+                self.client = None
+        
+        # Priority 2: Try Groq as fallback
+        if self.client is None and not self.mock_mode and GROQ_AVAILABLE and settings.GROQ_API_KEY:
+            try:
+                groq_key = _sanitize_text(settings.GROQ_API_KEY)
+                self.groq_client = Groq(api_key=groq_key)
+                self.using_groq = True
+                print(f"✅ Groq fallback initialized. Model: {self.GROQ_MODEL}")
+            except Exception as e:
+                print(f"⚠️ Groq init failed: {e}")
+                self.groq_client = None
+        
+        # If neither provider is available, enter mock mode
+        if self.client is None and self.groq_client is None:
+            self.mock_mode = True
+            if not settings.USE_MOCK_SERVICES:
+                print("⚠️ No LLM provider available. Running in mock mode.")
+                print("   Set GEMINI_API_KEY or GROQ_API_KEY in your .env file.")
+                print("   Get a free Groq key at: https://console.groq.com")
+
+    # --- GROQ FALLBACK HELPERS ---
+    
+    def _groq_generate(self, system_prompt: str, user_prompt: str, temperature: float = 0.7, max_tokens: int = 800) -> Optional[str]:
+        """Generate text using Groq API. Returns None on failure."""
+        if not self.groq_client:
+            return None
+        try:
+            response = self.groq_client.chat.completions.create(
+                model=self.GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Groq API error: {e}")
+            return None
+    
+    def _groq_generate_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> Optional[Any]:
+        """Generate JSON using Groq API with json_object response format. Returns parsed JSON or None."""
+        if not self.groq_client:
+            return None
+        try:
+            response = self.groq_client.chat.completions.create(
+                model=self.GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                max_tokens=2000,
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content.strip()
+            return json.loads(raw)
+        except Exception as e:
+            print(f"Groq JSON API error: {e}")
+            return None
+
+    # --- MAIN API METHODS ---
 
     def parse_natural_language_log(self, text: str) -> List[Dict[str, Any]]:
         """
         Parses unstructured natural language into structured carbon logs.
-        Returns a list of logs with category, subcategory, quantity, description, carbon_kg, and calculation details.
+        Priority: Gemini → Groq → Mock fallback.
         """
         if self.mock_mode:
             return self._mock_parse_natural_language(text)
@@ -70,38 +155,57 @@ class GeminiService:
 
         Output strictly JSON. Return only the JSON list of activities.
         """
-        try:
-            response = self.client.models.generate_content(
-                model=self.MODEL_PRO,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.1
+        
+        activities = None
+        
+        # Try Gemini first
+        if self.client:
+            try:
+                response = self.client.models.generate_content(
+                    model=self.MODEL_PRO,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.1
+                    )
                 )
-            )
-            raw_json = response.text.strip()
-            activities = json.loads(raw_json)
-            
-            # Enrich activities with actual carbon calculations
+                activities = json.loads(response.text.strip())
+            except Exception as e:
+                print(f"Gemini parse_log failed: {e}")
+        
+        # Try Groq fallback
+        if activities is None and self.groq_client:
+            system = "You are a carbon footprint estimation assistant. Always respond with valid JSON only — a JSON array of activity objects."
+            result = self._groq_generate_json(system, prompt)
+            if result is not None:
+                # Groq json_object mode wraps in an object — handle both list and {"activities": [...]}
+                if isinstance(result, list):
+                    activities = result
+                elif isinstance(result, dict):
+                    activities = result.get("activities", result.get("items", [result]))
+        
+        # If we got activities from either provider, enrich with carbon calculations
+        if activities:
             for activity in activities:
                 calc = calculate_footprint(
-                    activity["category"],
-                    activity["subcategory"],
+                    activity.get("category", "food"),
+                    activity.get("subcategory", "meal_standard"),
                     float(activity.get("quantity", 1))
                 )
                 activity["carbon_kg"] = calc["carbon_kg"]
                 activity["explanation"] = calc["calculation_basis"]
-            
             return activities
-        except Exception as e:
-            print(f"Error parsing log with Gemini Pro: {e}. Falling back to mock parsing.")
-            return self._mock_parse_natural_language(text)
+        
+        # Final fallback to mock
+        print("All LLM providers failed for parse_log. Using mock parser.")
+        return self._mock_parse_natural_language(text)
 
     def parse_receipt(self, file_bytes: bytes, file_mime: str) -> Dict[str, Any]:
         """
         Parses receipt or utility bill using Gemini Flash multimodal capabilities.
+        Note: Groq doesn't support multimodal — falls back to mock for receipt OCR.
         """
-        if self.mock_mode:
+        if self.mock_mode or self.using_groq:
             return self._mock_parse_receipt(file_mime)
 
         prompt = """
@@ -174,7 +278,7 @@ class GeminiService:
         and give genuinely helpful sustainability advice.
         """
         if self.mock_mode:
-            return self._mock_coaching_response(message, tips, current_score_kg)
+            return self._mock_coaching_response(message, tips, current_score_kg, chat_history)
 
         # Sanitize all inputs to prevent BOM/encoding issues
         message = _sanitize_text(message)
@@ -231,23 +335,31 @@ CURRENT USER MESSAGE: {message}
 Respond naturally and helpfully. Remember: answer their question FIRST, then offer 2-3 specific tips if appropriate.""")
 
         try:
-            response = self.client.models.generate_content(
-                model=self.MODEL_FLASH,
-                contents=[
-                    types.Content(role="user", parts=[types.Part.from_text(text=system_prompt + "\n\n" + user_prompt)])
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=0.7,
-                    top_p=0.9,
-                    max_output_tokens=800
+            # Try Gemini first
+            if self.client:
+                response = self.client.models.generate_content(
+                    model=self.MODEL_FLASH,
+                    contents=[
+                        types.Content(role="user", parts=[types.Part.from_text(text=system_prompt + "\n\n" + user_prompt)])
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=0.7,
+                        top_p=0.9,
+                        max_output_tokens=800
+                    )
                 )
-            )
-            return response.text
+                return response.text
         except Exception as e:
-            print(f"Error calling Eco-Coach Gemini API: {e}. Falling back to mock response.")
-            import traceback
-            traceback.print_exc()
-            return self._mock_coaching_response(message, tips, current_score_kg)
+            print(f"Gemini coaching failed: {e}")
+        
+        # Try Groq fallback
+        if self.groq_client:
+            groq_result = self._groq_generate(system_prompt, user_prompt, temperature=0.7, max_tokens=800)
+            if groq_result:
+                return groq_result
+        
+        # Final fallback to mock
+        return self._mock_coaching_response(message, tips, current_score_kg, chat_history)
 
     # --- MOCK IMPLEMENTATIONS ---
     
@@ -455,36 +567,276 @@ Respond naturally and helpfully. Remember: answer their question FIRST, then off
                 "estimated_total_carbon_kg": round(calc_beef["carbon_kg"] + calc_poultry["carbon_kg"], 2)
             }
 
-    def _mock_coaching_response(self, message: str, tips: List[str], current_score_kg: float) -> str:
-        """Improved mock response that's at least category-aware and doesn't give canned intros."""
-        msg_lower = message.lower()
+    def _mock_coaching_response(self, message: str, tips: List[str], current_score_kg: float, chat_history: List[Dict[str, str]] = None) -> str:
+        """Context-aware, culturally-sensitive mock coaching response generator.
         
-        tips_bullets = "\n".join([f"• {tip}" for tip in tips])
-        if not tips:
-            tips_bullets = "• Switch off appliances at the socket to eliminate standby energy loss.\n• Take public transport, cycle, or walk for journeys under 5 km.\n• Incorporate more plant-based days into your weekly diet."
+        Instead of returning static hardcoded strings, this:
+        1. Reads full conversation history to avoid repetition and track identity
+        2. Detects cultural/religious/dietary identities and filters advice accordingly
+        3. Generates dynamic, varied responses using composable response fragments
+        4. Directly answers the user's actual question before offering tips
+        """
+        import random
+        import hashlib
         
-        # EV-specific question
-        if "ev" in msg_lower or "electric vehicle" in msg_lower or "electric car" in msg_lower:
-            return f"Great question! **Yes, EVs are significantly more eco-friendly** than internal combustion engine vehicles over their lifetime, even accounting for battery production and electricity generation:\n\n• An average EV produces **50-70% fewer lifecycle CO2 emissions** than a petrol car.\n• The carbon footprint decreases further if your electricity grid uses renewables.\n• Battery manufacturing does have an upfront carbon cost (~6-8 tonnes CO2), but this is offset within 1.5-2 years of driving.\n• EVs also eliminate tailpipe NOx and particulate emissions, improving local air quality.\n\n**Pro tip:** If you charge during off-peak hours when grid demand is low, your carbon impact is even smaller. Your current footprint is **{current_score_kg} kg CO2e**."
-
-        # Greeting — only respond to pure greetings, not words containing 'hi'
-        if msg_lower.strip() in ["hello", "hi", "hey", "hi there", "hello there", "hey there"]:
-            return f"Hello! I'm your **Eco-Coach** 🌿. I'm here to help you log activities, estimate carbon impact, and discover practical lifestyle changes.\n\nYour current tracked footprint is **{current_score_kg} kg CO2e**. What would you like to explore today?"
-
-        if "log" in msg_lower or "carbon" in msg_lower or "score" in msg_lower or "footprint" in msg_lower:
-            return f"Your current tracked footprint is **{current_score_kg} kg CO2e**. Here are personalized tips to help reduce it further:\n\n{tips_bullets}\n\nWould you like specific advice on transit, food, or energy?"
-
-        if any(w in msg_lower for w in ["transit", "travel", "car", "drive", "commute", "flight", "fly"]):
-            return f"Transportation is often the **largest contributor** to personal carbon emissions. Here's what the data shows:\n\n• **Public transit** emits 45-80% less CO2 per km than solo driving.\n• **Carpooling** with just one other person cuts your per-trip emissions in half.\n• For flights, **economy class** produces ~50% less emissions per passenger than business class.\n• Even eco-driving habits (smooth acceleration, proper tire pressure) can cut fuel use by 15-20%.\n\nYour current score is **{current_score_kg} kg CO2e**. Small shifts in how you commute can make a big difference!"
+        msg_lower = message.lower().strip()
+        chat_history = chat_history or []
+        
+        # --- 1. BUILD FULL CONVERSATION CONTEXT ---
+        all_user_text = " ".join(
+            turn.get("content", "").lower()
+            for turn in chat_history
+            if turn.get("role") == "user"
+        ) + " " + msg_lower
+        
+        all_assistant_text = " ".join(
+            turn.get("content", "").lower()
+            for turn in chat_history
+            if turn.get("role") == "assistant"
+        )
+        
+        # Track what topics have already been discussed
+        topics_discussed = set()
+        topic_keywords = {
+            "transit": ["car", "drive", "commute", "flight", "fly", "bus", "train", "travel", "transit"],
+            "food": ["food", "diet", "eat", "meal", "cooking", "grocery", "meat", "vegan", "vegetarian"],
+            "energy": ["energy", "electricity", "power", "bill", "appliance", "ac", "heating", "cooling", "solar"],
+            "waste": ["waste", "recycle", "trash", "compost", "plastic", "landfill"],
+            "ev": ["ev", "electric vehicle", "electric car", "tesla", "hybrid"],
+        }
+        for topic, kws in topic_keywords.items():
+            if any(kw in all_assistant_text for kw in kws):
+                topics_discussed.add(topic)
+        
+        # --- 2. DETECT CULTURAL / DIETARY IDENTITY ---
+        user_identity = {
+            "hindu": False, "muslim": False, "jewish": False, "jain": False,
+            "buddhist": False, "sikh": False, "christian": False,
+            "vegan": False, "vegetarian": False, "pescatarian": False,
+            "indian": False, "south_asian": False, "east_asian": False,
+            "middle_eastern": False, "african": False, "latin_american": False,
+        }
+        identity_keywords = {
+            "hindu": ["hindu", "hinduism", "mandir", "temple", "diwali", "navratri"],
+            "muslim": ["muslim", "islam", "halal", "ramadan", "eid", "mosque", "masjid"],
+            "jewish": ["jewish", "kosher", "synagogue", "shabbat", "hanukkah"],
+            "jain": ["jain", "jainism", "ahimsa"],
+            "buddhist": ["buddhist", "buddhism"],
+            "sikh": ["sikh", "sikhism", "gurdwara", "langar"],
+            "vegan": ["vegan", "plant-based", "plant based"],
+            "vegetarian": ["vegetarian", "veggie", "no meat", "don't eat meat", "i am veg", "i'm veg"],
+            "pescatarian": ["pescatarian", "only fish"],
+            "indian": ["india", "indian", "delhi", "mumbai", "bangalore", "kolkata", "chennai", "hyderabad", "pune"],
+            "south_asian": ["pakistan", "bangladesh", "sri lanka", "nepal"],
+            "east_asian": ["china", "japan", "korea", "chinese", "japanese", "korean"],
+            "middle_eastern": ["middle east", "saudi", "dubai", "uae", "qatar", "iran"],
+            "african": ["nigeria", "kenya", "south africa", "ghana", "african"],
+            "latin_american": ["mexico", "brazil", "argentina", "colombian", "latin"],
+        }
+        for identity, kws in identity_keywords.items():
+            if any(kw in all_user_text for kw in kws):
+                user_identity[identity] = True
+        
+        # Infer dietary restrictions from identity
+        avoid_foods = set()
+        preferred_alternatives = []
+        
+        if user_identity["hindu"]:
+            avoid_foods.update(["beef", "cow", "steak", "veal"])
+            preferred_alternatives = ["paneer", "dal (lentils)", "chickpeas", "tofu", "seasonal vegetables"]
+        if user_identity["muslim"] or user_identity["jewish"]:
+            avoid_foods.update(["pork", "bacon", "ham", "lard"])
+            preferred_alternatives = ["legumes", "grains", "chicken", "fish", "seasonal vegetables"]
+        if user_identity["jain"]:
+            avoid_foods.update(["beef", "pork", "chicken", "fish", "egg", "onion", "garlic", "potato", "root vegetable"])
+            preferred_alternatives = ["mung beans", "lentils", "leafy greens", "fruits", "milk-based proteins"]
+        if user_identity["vegan"]:
+            avoid_foods.update(["beef", "pork", "chicken", "fish", "egg", "dairy", "cheese", "milk", "butter", "yogurt"])
+            preferred_alternatives = ["tofu", "tempeh", "lentils", "quinoa", "nuts and seeds"]
+        if user_identity["vegetarian"]:
+            avoid_foods.update(["beef", "pork", "chicken", "fish", "meat"])
+            preferred_alternatives = ["paneer", "lentils", "beans", "tofu", "dairy"]
+        if user_identity["sikh"]:
+            # Many Sikhs are vegetarian; Sikh langar is always vegetarian
+            preferred_alternatives = ["langar-style dal", "roti", "seasonal sabzi", "rice", "yogurt"]
+        
+        # --- 3. FILTER TIPS TO RESPECT CULTURAL IDENTITY ---
+        def is_tip_safe(tip: str) -> bool:
+            tip_lower = tip.lower()
+            for banned_word in avoid_foods:
+                if banned_word in tip_lower:
+                    return False
+            return True
+        
+        safe_tips = [t for t in tips if is_tip_safe(t)]
+        if not safe_tips:
+            # Provide culturally-aware fallback tips
+            safe_tips = [
+                "Choose seasonal, locally-sourced produce to minimize food miles.",
+                "Switch off standby appliances to cut 5-10% from your electricity bill.",
+                "Walk or cycle for trips under 3 km — zero emissions and great for health."
+            ]
+            if preferred_alternatives:
+                safe_tips.insert(0, f"Try protein-rich options like {', '.join(preferred_alternatives[:3])} — low-carbon and nutritious.")
+        
+        tips_bullets = "\n".join([f"• {tip}" for tip in safe_tips[:4]])
+        
+        # --- 4. DETERMINE RESPONSE TYPE ---
+        # Use message hash for deterministic but varied responses
+        msg_hash = int(hashlib.md5(message.encode()).hexdigest(), 16)
+        is_first_message = len(chat_history) == 0
+        is_question = "?" in message or any(message.lower().startswith(w) for w in ["is ", "are ", "can ", "do ", "does ", "how ", "what ", "why ", "which ", "should "])
+        
+        # Varied openers — never the same stale intro
+        openers_general = [
+            "Great question!",
+            "That's worth exploring.",
+            "Interesting — let me break this down.",
+            "Good thinking.",
+            "Here's what the research shows.",
+        ]
+        openers_followup = [
+            "Building on our conversation —",
+            "Good follow-up.",
+            "Continuing from earlier —",
+            "To add to what we discussed —",
+        ]
+        
+        # Pick opener based on context
+        if is_first_message:
+            opener = ""
+        elif len(chat_history) > 4:
+            opener = openers_followup[msg_hash % len(openers_followup)] + " "
+        else:
+            opener = openers_general[msg_hash % len(openers_general)] + " "
+        
+        # --- 5. GREETING ---
+        if msg_lower in ["hello", "hi", "hey", "hi there", "hello there", "hey there", "namaste", "salaam", "salam"]:
+            greeting_responses = [
+                f"Hello! I'm your **Eco-Coach** 🌿. I'm here to help you understand your environmental impact and find practical ways to reduce it.\n\nYour current tracked footprint is **{current_score_kg} kg CO2e**. What would you like to explore?",
+                f"Hey there! 🌿 Welcome to Eco-Coach. I can help you track carbon impact, understand your habits, and discover smarter alternatives.\n\nYou're currently at **{current_score_kg} kg CO2e**. Ask me anything — from food choices to energy savings!",
+                f"Hi! 🌱 I'm Eco-Coach, your sustainability assistant. Whether it's about commuting, cooking, or energy use — I've got data-backed advice for you.\n\nYour footprint so far: **{current_score_kg} kg CO2e**. What's on your mind?",
+            ]
+            return greeting_responses[msg_hash % len(greeting_responses)]
+        
+        # --- 6. SPECIFIC TOPIC RESPONSES (context-aware) ---
+        
+        # EV / Electric vehicle questions
+        if any(kw in msg_lower for kw in ["ev", "electric vehicle", "electric car", "hybrid", "tesla"]):
+            ev_responses = [
+                f"{opener}**Yes, EVs are significantly better** for the climate compared to petrol/diesel cars over their full lifecycle:\n\n• An EV produces **50-70% fewer CO2 emissions** over its lifetime than a comparable petrol car.\n• If your electricity comes from renewables, the gap widens even further.\n• Battery production has an upfront carbon cost (~6-8 tonnes CO2), typically offset within **1.5-2 years** of driving.\n• EVs eliminate tailpipe pollutants (NOx, PM2.5), improving local air quality immediately.\n\n**Practical tip:** Charge during off-peak hours when grid carbon intensity is lowest.",
+                f"{opener}**EVs are a clear win for emissions**, though the picture has nuance:\n\n• Lifecycle emissions are **50-70% lower** than internal combustion engines — and improving as grids get cleaner.\n• The carbon payback period on battery manufacturing is typically under 2 years of normal driving.\n• In countries with coal-heavy grids, the benefit is smaller but still positive; in renewable-heavy grids, it's dramatic.\n• **Plug-in hybrids** offer a middle ground if charging infrastructure is limited in your area.\n\nYour current footprint is **{current_score_kg} kg CO2e** — switching to EV commuting could meaningfully reduce the transit portion."
+            ]
+            return ev_responses[msg_hash % len(ev_responses)]
+        
+        # Carbon score / footprint questions
+        if any(kw in msg_lower for kw in ["score", "footprint", "how much", "my carbon", "my impact", "total"]):
+            score_context = ""
+            if current_score_kg < 5:
+                score_context = "That's quite low — you're making good choices!"
+            elif current_score_kg < 20:
+                score_context = "That's moderate — there's room for targeted improvements."
+            elif current_score_kg < 50:
+                score_context = "That's in the higher range — but focused changes in 1-2 areas can bring it down significantly."
+            else:
+                score_context = "That's elevated, but don't worry — even a few habit changes can make a big impact."
             
-        if any(w in msg_lower for w in ["food", "diet", "eat", "meal", "cooking", "grocery"]):
-            return f"Food choices have a huge impact on your carbon footprint! Here are evidence-based strategies:\n\n• **Plant-based meals** produce 50-90% fewer emissions than meat-heavy ones.\n• **Seasonal, local produce** cuts emissions from refrigerated transport and storage.\n• **Reducing food waste** is one of the top climate solutions — plan meals ahead and use leftovers creatively.\n• Legumes (lentils, chickpeas, beans) are protein-rich with a fraction of the carbon cost of meat.\n\nYour footprint is currently **{current_score_kg} kg CO2e**. Even swapping 2-3 meals a week to plant-based can make a measurable dent!"
-
-        if any(w in msg_lower for w in ["energy", "electricity", "power", "bill", "appliance", "ac", "heating", "cooling"]):
-            return f"Home energy use is a great area for quick wins! Here's what works:\n\n• **LED bulbs** use 85% less energy than incandescent — swap them first.\n• **Unplug electronics** when not in use; standby power is 5-10% of your bill.\n• Set your AC 1-2°C higher in summer (or lower in winter) to reduce HVAC energy by ~10%.\n• **Cold water laundry** saves 90% of the energy a washing machine uses.\n\nYour tracked footprint: **{current_score_kg} kg CO2e**. These changes often save money too!"
-
-        # General/unknown topic — give a thoughtful response
-        return f"That's a thoughtful question! Here are some relevant insights based on sustainability research:\n\n{tips_bullets}\n\nYour current tracked footprint is **{current_score_kg} kg CO2e**. Every small change compounds over time — what specific area would you like to dive deeper into?"
+            return f"{opener}Your current tracked footprint is **{current_score_kg} kg CO2e**. {score_context}\n\nHere are targeted recommendations:\n\n{tips_bullets}\n\nWould you like to drill into a specific category — transit, food, or energy?"
+        
+        # Transit / travel / driving
+        if any(kw in msg_lower for kw in ["drive", "car", "commute", "travel", "transit", "flight", "fly", "bus", "train", "bike", "cycle", "walk"]):
+            transit_facts = [
+                "**Public transit** emits 45-80% less CO2 per km than solo driving.",
+                "**Carpooling** with even one other person halves your per-trip emissions.",
+                "**Economy class** produces ~50% fewer emissions per passenger than business class on flights.",
+                "Eco-driving habits (smooth acceleration, proper tire pressure) cut fuel use by **15-20%**.",
+                "A **10-km daily cycle commute** saves roughly 0.5 tonnes of CO2 per year vs. driving.",
+                "**Remote work** even 2 days/week can cut commute emissions by 40%.",
+            ]
+            # Pick facts that haven't been mentioned in prior assistant messages
+            fresh_facts = [f for f in transit_facts if _extract_bold_key(f) not in all_assistant_text] or transit_facts
+            selected = fresh_facts[:4]
+            facts_str = "\n".join([f"• {f}" for f in selected])
+            
+            return f"{opener}Transportation is typically the **largest contributor** to personal emissions. Here's what matters most:\n\n{facts_str}\n\nYour footprint is **{current_score_kg} kg CO2e**. Even small shifts in how you commute add up over months."
+        
+        # Food / diet / eating (with cultural awareness)
+        if any(kw in msg_lower for kw in ["food", "diet", "eat", "meal", "cooking", "grocery", "recipe", "protein", "lunch", "dinner", "breakfast"]):
+            food_tips = []
+            
+            # Build culturally-appropriate food advice
+            if user_identity["vegan"]:
+                food_tips = [
+                    "You're already making one of the biggest positive choices! **Plant-based diets** produce 50-90% fewer emissions.",
+                    f"Focus on **seasonal, local produce** to further minimize food miles.",
+                    "**Legumes and whole grains** (lentils, quinoa, brown rice) are the most carbon-efficient protein sources.",
+                    "Reducing food waste is the next frontier — meal planning can cut household waste by 25%.",
+                ]
+            elif user_identity["vegetarian"] or user_identity["hindu"] or user_identity["jain"]:
+                food_tips = [
+                    "Vegetarian diets already have a **significantly lower carbon footprint** than meat-based ones.",
+                    f"Great protein sources: **{', '.join(preferred_alternatives[:3]) if preferred_alternatives else 'dal, paneer, chickpeas'}** — all low-carbon.",
+                    "**Seasonal and local produce** reduces transport emissions and is often fresher and cheaper.",
+                    "Try reducing dairy gradually if comfortable — plant-based milk has **~1/3 the carbon footprint** of cow's milk.",
+                ]
+                if user_identity["jain"]:
+                    food_tips[3] = "Focus on **above-ground vegetables and fruits** — they're low-carbon and align with your values."
+            elif user_identity["muslim"] or user_identity["jewish"]:
+                food_tips = [
+                    "**Poultry and fish** have significantly lower carbon footprints than red meat (6-7 vs 27 kg CO2e/kg).",
+                    f"Protein-rich options like **{', '.join(preferred_alternatives[:3]) if preferred_alternatives else 'legumes, chicken, fish'}** are excellent low-carbon choices.",
+                    "**Seasonal local produce** cuts emissions from transport and cold storage.",
+                    "Reducing food waste during meal prep can cut household emissions by up to 8%.",
+                ]
+            else:
+                food_tips = [
+                    "**Plant-based meals** produce 50-90% fewer emissions than meat-heavy ones.",
+                    "**Seasonal, local produce** cuts emissions from refrigerated transport and storage.",
+                    "**Reducing food waste** is one of the top climate solutions — plan meals and use leftovers creatively.",
+                    "Legumes (lentils, chickpeas, beans) are protein-rich with a fraction of the carbon cost of meat.",
+                ]
+            
+            # Avoid repeating what we already said
+            fresh_tips = [t for t in food_tips if _extract_bold_key(t) not in all_assistant_text] or food_tips[:3]
+            tips_str = "\n".join([f"• {t}" for t in fresh_tips[:4]])
+            
+            return f"{opener}Food choices have a measurable impact on your footprint. Here's what's most relevant for you:\n\n{tips_str}\n\nYour footprint is **{current_score_kg} kg CO2e**. Even swapping 2-3 meals a week can make a measurable difference!"
+        
+        # Energy / electricity / home
+        if any(kw in msg_lower for kw in ["energy", "electricity", "power", "bill", "appliance", "ac", "heating", "cooling", "solar", "led", "bulb", "fan", "geyser"]):
+            energy_facts = [
+                "**LED bulbs** use 85% less energy than incandescent — one of the easiest swaps.",
+                "**Unplugging standby devices** saves 5-10% of household electricity.",
+                "Setting AC just **1-2°C higher** in summer reduces HVAC energy by ~10%.",
+                "**Cold water laundry** saves 90% of a washing machine's energy per load.",
+                "**Smart power strips** auto-cut power to devices in standby mode.",
+                "A **5-star rated AC** can save 20-30% energy compared to a 3-star unit.",
+                "**Solar water heaters** can eliminate 50-70% of your water heating electricity.",
+            ]
+            fresh_facts = [f for f in energy_facts if _extract_bold_key(f) not in all_assistant_text] or energy_facts[:4]
+            facts_str = "\n".join([f"• {f}" for f in fresh_facts[:4]])
+            
+            return f"{opener}Home energy is a great area for quick, money-saving wins:\n\n{facts_str}\n\nYour tracked footprint: **{current_score_kg} kg CO2e**. Many of these changes pay for themselves within months!"
+        
+        # Waste / recycling
+        if any(kw in msg_lower for kw in ["waste", "recycle", "trash", "compost", "plastic", "landfill", "garbage"]):
+            return f"{opener}Waste management has a bigger climate impact than most people realize:\n\n• **Food waste in landfills** generates methane, which is 80x more potent than CO2 over 20 years.\n• **Composting** organic waste reduces methane and creates nutrient-rich soil.\n• **Recycling metals** (especially aluminum) saves 90-95% of the energy needed for virgin production.\n• Carrying **reusable bags, bottles, and containers** eliminates significant single-use plastic waste.\n\nYour footprint: **{current_score_kg} kg CO2e**. Waste reduction is one of the most underrated climate actions."
+        
+        # Specific factual questions
+        if is_question:
+            # Try to give a direct, thoughtful answer
+            return f"{opener}Based on sustainability research and data:\n\n{tips_bullets}\n\nYour tracked footprint is **{current_score_kg} kg CO2e**. I can dive deeper into any of these areas — just ask!"
+        
+        # --- 7. GENERAL / FALLBACK (still dynamic) ---
+        general_closers = [
+            "What specific area would you like to dive deeper into?",
+            "Want me to focus on transit, food, or energy next?",
+            "I can break down any category in more detail — just say the word.",
+            "Shall I help you set a specific reduction target?",
+        ]
+        closer = general_closers[msg_hash % len(general_closers)]
+        
+        return f"{opener}Here are some relevant insights for you:\n\n{tips_bullets}\n\nYour current tracked footprint is **{current_score_kg} kg CO2e**. Every small change compounds over time. {closer}"
 
 # Singleton Instance
 gemini_service = GeminiService()

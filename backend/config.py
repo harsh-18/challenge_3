@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     PROJECT_ID: str = os.getenv("PROJECT_ID", "mock-gcp-project")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     
+    # Groq fallback LLM (used when Gemini API key is missing or fails)
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    
     # Firestore / Firebase
     FIRESTORE_DATABASE: str = os.getenv("FIRESTORE_DATABASE", "(default)")
     

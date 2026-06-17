@@ -212,35 +212,80 @@ class FirestoreDatabase:
 
     def _mock_search_tips(self, query_text: str, category_hint: Optional[str] = None, limit: int = 3) -> List[str]:
         """
-        Simple, robust keyword and category matching for mock RAG search.
+        Relevance-scored keyword matching for mock RAG search.
+        Ranks tips by how many query keywords appear in the tip text,
+        with category match as a boost factor.
         """
+        import re
+        
         query_lower = query_text.lower()
+        # Extract meaningful words (skip very short words and stopwords)
+        stopwords = {"i", "a", "an", "the", "is", "are", "am", "was", "were", "be", "been",
+                      "to", "of", "in", "on", "at", "for", "and", "or", "but", "not", "my",
+                      "me", "we", "you", "it", "do", "does", "did", "can", "how", "what",
+                      "this", "that", "with", "from", "have", "has", "had", "will", "would",
+                      "should", "could", "about", "more", "some", "very", "much", "so", "too"}
+        query_words = [w for w in re.findall(r'[a-z]+', query_lower) if len(w) > 2 and w not in stopwords]
         
         # Determine target category
         target_category = category_hint
         if not target_category:
-            if any(k in query_lower for k in ["drive", "car", "travel", "flight", "flew", "transit", "train", "bus"]):
-                target_category = "transit"
-            elif any(k in query_lower for k in ["electric", "electricity", "bulb", "appliances", "power", "ac", "hvac", "energy"]):
-                target_category = "energy"
-            elif any(k in query_lower for k in ["eat", "food", "beef", "chicken", "diet", "vegan", "vegetarian", "meal"]):
-                target_category = "food"
-            elif any(k in query_lower for k in ["waste", "trash", "recycle", "garbage", "compost", "plastic"]):
-                target_category = "waste"
-                
-        # Filter matching tips
-        matched_tips = []
-        if target_category:
-            matched_tips = [tip["tip_text"] for tip in MOCK_DB["tips"] if tip["category"] == target_category]
+            category_signals = {
+                "transit": ["drive", "car", "travel", "flight", "flew", "transit", "train", "bus", 
+                            "commute", "bike", "cycle", "walk", "metro", "uber", "ride"],
+                "energy": ["electric", "electricity", "bulb", "appliances", "power", "hvac", "energy",
+                           "solar", "led", "fan", "geyser", "heater", "cooling", "heating", "bill", "kwh"],
+                "food": ["eat", "food", "beef", "chicken", "diet", "vegan", "vegetarian", "meal",
+                         "cooking", "grocery", "protein", "dairy", "meat", "fish", "recipe", "lunch", "dinner"],
+                "waste": ["waste", "trash", "recycle", "garbage", "compost", "plastic", "landfill",
+                          "reuse", "reduce", "packaging", "bottle", "bag"],
+            }
+            best_cat = None
+            best_count = 0
+            for cat, signals in category_signals.items():
+                count = sum(1 for s in signals if s in query_lower)
+                if count > best_count:
+                    best_count = count
+                    best_cat = cat
+            target_category = best_cat
+        
+        # Score each tip by relevance
+        scored_tips = []
+        for tip_data in MOCK_DB["tips"]:
+            tip_text = tip_data["tip_text"]
+            tip_lower = tip_text.lower()
+            tip_category = tip_data["category"]
             
-        # If no category match, take a diverse mix of tips
-        if not matched_tips:
-            matched_tips = [tip["tip_text"] for tip in MOCK_DB["tips"]]
+            # Base score: count of query words found in tip text
+            word_score = sum(1 for w in query_words if w in tip_lower)
             
-        # Shuffle/take top limits
-        import random
-        # Use seed for consistency or just return slice
-        return matched_tips[:limit]
+            # Category bonus
+            category_bonus = 3 if (target_category and tip_category == target_category) else 0
+            
+            # Exact phrase fragment bonus
+            phrase_bonus = 0
+            for i in range(len(query_words) - 1):
+                bigram = f"{query_words[i]} {query_words[i+1]}"
+                if bigram in tip_lower:
+                    phrase_bonus += 2
+            
+            total_score = word_score + category_bonus + phrase_bonus
+            scored_tips.append((total_score, tip_text))
+        
+        # Sort by score descending, then take top N
+        scored_tips.sort(key=lambda x: x[0], reverse=True)
+        
+        # Deduplicate and return
+        seen = set()
+        results = []
+        for score, tip in scored_tips:
+            if tip not in seen:
+                seen.add(tip)
+                results.append(tip)
+                if len(results) >= limit:
+                    break
+        
+        return results
 
 # Singleton Instance
 firestore_db = FirestoreDatabase()
