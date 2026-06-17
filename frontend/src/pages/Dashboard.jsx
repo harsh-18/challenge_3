@@ -17,8 +17,12 @@ function Dashboard({ user }) {
       const token = await authService.getAuthToken();
       const headers = { 'Authorization': `Bearer ${token}` };
       
-      // 1. Fetch Logs
-      const logsRes = await fetch('/api/logs', { headers });
+      // Fetch Logs and Tips in parallel
+      const [logsRes, tipsRes] = await Promise.all([
+        fetch('/api/logs', { headers }),
+        fetch('/api/tips', { headers })
+      ]);
+      
       if (logsRes.ok) {
         const data = await logsRes.json();
         setLogs(data.logs || []);
@@ -27,8 +31,6 @@ function Dashboard({ user }) {
         throw new Error('Failed to load carbon logs.');
       }
       
-      // 2. Fetch Tips
-      const tipsRes = await fetch('/api/tips', { headers });
       if (tipsRes.ok) {
         const data = await tipsRes.json();
         setTips(data.tips || []);
@@ -80,11 +82,11 @@ function Dashboard({ user }) {
 
   const getCategoryIcon = (category) => {
     switch (category.toLowerCase()) {
-      case 'transit': return <Car size={18} style={{ color: 'var(--color-transit)' }} />;
-      case 'energy': return <Zap size={18} style={{ color: 'var(--color-energy)' }} />;
-      case 'food': return <UtensilsCrossed size={18} style={{ color: 'var(--color-food)' }} />;
-      case 'waste': return <Trash2 size={18} style={{ color: 'var(--color-waste)' }} />;
-      default: return <Leaf size={18} style={{ color: 'var(--accent-emerald)' }} />;
+      case 'transit': return <Car size={18} style={{ color: 'var(--color-transit)' }} aria-hidden="true" />;
+      case 'energy': return <Zap size={18} style={{ color: 'var(--color-energy)' }} aria-hidden="true" />;
+      case 'food': return <UtensilsCrossed size={18} style={{ color: 'var(--color-food)' }} aria-hidden="true" />;
+      case 'waste': return <Trash2 size={18} style={{ color: 'var(--color-waste)' }} aria-hidden="true" />;
+      default: return <Leaf size={18} style={{ color: 'var(--accent-emerald)' }} aria-hidden="true" />;
     }
   };
 
@@ -235,17 +237,35 @@ function Dashboard({ user }) {
             </p>
 
             <form onSubmit={handleNLSubmit} style={{ display: 'flex', gap: '12px' }}>
+              <label htmlFor="nl-activity-input" style={{
+                position: 'absolute',
+                width: '1px',
+                height: '1px',
+                padding: '0',
+                margin: '-1px',
+                overflow: 'hidden',
+                clip: 'rect(0, 0, 0, 0)',
+                border: '0'
+              }}>Log Activity in Plain English</label>
               <input
+                id="nl-activity-input"
                 type="text"
                 className="input-field"
                 placeholder="What did you do today? e.g., flew economy from Delhi to Mumbai..."
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 disabled={logging}
+                aria-label="Log activity in plain English"
               />
-              <button type="submit" className="btn-primary" disabled={logging || !inputText.trim()} style={{ whiteSpace: 'nowrap' }}>
+              <button 
+                type="submit" 
+                className="btn-primary" 
+                disabled={logging || !inputText.trim()} 
+                style={{ whiteSpace: 'nowrap' }}
+                aria-label="Submit activity log"
+              >
                 {logging ? 'Processing...' : 'Log'}
-                <Send size={16} />
+                <Send size={16} aria-hidden="true" />
               </button>
             </form>
           </div>

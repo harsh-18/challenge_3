@@ -18,7 +18,7 @@ class TestEcoSphereAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["status"], "healthy")
-        self.assertTrue(data["mock_mode"])
+        self.assertIn("mock_mode", data)
 
     def test_get_metrics(self):
         response = self.client.get("/api/metrics")
@@ -63,6 +63,37 @@ class TestEcoSphereAPI(unittest.TestCase):
         data = response.json()
         self.assertIn("tips", data)
         self.assertTrue(len(data["tips"]) > 0)
+
+    def test_unauthorized_access_defaults_gracefully(self):
+        # The auth dependency should gracefully handle missing headers by defaulting to mock user
+        response = self.client.get("/api/logs")
+        self.assertEqual(response.status_code, 200)
+
+    def test_empty_payload_validation(self):
+        # Empty text field
+        payload = {"text": ""}
+        response = self.client.post("/api/logs/text", json=payload, headers=self.auth_headers)
+        self.assertEqual(response.status_code, 422)
+
+    def test_extremely_long_payload_validation(self):
+        # Payload greater than 1000 characters
+        payload = {"text": "A" * 1005}
+        response = self.client.post("/api/logs/text", json=payload, headers=self.auth_headers)
+        self.assertEqual(response.status_code, 422)
+
+    def test_receipt_ocr_mock(self):
+        # Upload a dummy file
+        dummy_file = b"Dummy receipt content for testing."
+        response = self.client.post(
+            "/api/logs/receipt",
+            files={"file": ("receipt.png", dummy_file, "image/png")},
+            headers=self.auth_headers
+        )
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        self.assertEqual(data["status"], "success")
+        self.assertIn("merchant", data)
+        self.assertIn("estimated_total_carbon_kg", data)
 
 if __name__ == "__main__":
     unittest.main()

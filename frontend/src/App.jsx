@@ -58,16 +58,20 @@ function App() {
 
   if (loading) {
     return (
-      <div style={{
-        display: 'flex', 
-        height: '100vh', 
-        width: '100vw', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        background: '#0b0f17',
-        color: '#10b981'
-      }}>
-        <Leaf className="animate-spin-slow" size={48} />
+      <div 
+        role="progressbar" 
+        aria-label="Loading EcoSphere AI"
+        style={{
+          display: 'flex', 
+          height: '100vh', 
+          width: '100vw', 
+          alignItems: 'center', 
+          justifyContent: 'center',
+          background: '#0b0f17',
+          color: '#10b981'
+        }}
+      >
+        <Leaf className="animate-spin-slow" size={48} aria-hidden="true" />
       </div>
     );
   }
@@ -102,7 +106,7 @@ function App() {
               color: '#34d399',
               marginBottom: '12px'
             }}>
-              <Leaf size={32} />
+              <Leaf size={32} aria-hidden="true" />
             </div>
             <h1 style={{ fontSize: '1.8rem', fontWeight: '800' }}>EcoSphere AI</h1>
             <p style={{ color: '#9ca3af', fontSize: '0.9rem' }}>
@@ -119,31 +123,35 @@ function App() {
               borderRadius: '8px',
               fontSize: '0.85rem',
               textAlign: 'center'
-            }}>
+            }} role="alert">
               {authError}
             </div>
           )}
 
           <form onSubmit={handleEmailAuth} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '0.85rem', color: '#9ca3af', fontWeight: '500' }}>Email Address</label>
+              <label htmlFor="email-input" style={{ fontSize: '0.85rem', color: '#9ca3af', fontWeight: '500' }}>Email Address</label>
               <input 
+                id="email-input"
                 type="email" 
                 className="input-field" 
                 placeholder="you@domain.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                required
               />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '0.85rem', color: '#9ca3af', fontWeight: '500' }}>Password</label>
+              <label htmlFor="password-input" style={{ fontSize: '0.85rem', color: '#9ca3af', fontWeight: '500' }}>Password</label>
               <input 
+                id="password-input"
                 type="password" 
                 className="input-field" 
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                required
               />
             </div>
 
@@ -228,21 +236,22 @@ function App() {
   return (
     <div className="app-container">
       {/* Sidebar Navigation */}
-      <aside className="sidebar">
+      <aside className="sidebar" aria-label="Application Navigation">
         <div className="logo">
-          <Leaf className="logo-icon" size={28} />
+          <Leaf className="logo-icon" size={28} aria-hidden="true" />
           <span className="logo-text">EcoSphere AI</span>
         </div>
 
-        <nav style={{ flex: 1 }}>
+        <nav style={{ flex: 1 }} aria-label="Main Application Menu">
           <ul className="nav-menu">
             <li>
               <button 
                 onClick={() => setActiveTab('dashboard')} 
                 className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
                 style={{ width: '100%', border: 'none', background: 'none', textAlign: 'left' }}
+                aria-current={activeTab === 'dashboard' ? 'page' : undefined}
               >
-                <LayoutDashboard size={20} />
+                <LayoutDashboard size={20} aria-hidden="true" />
                 <span className="nav-label">Dashboard</span>
               </button>
             </li>
@@ -251,8 +260,9 @@ function App() {
                 onClick={() => setActiveTab('coach')} 
                 className={`nav-item ${activeTab === 'coach' ? 'active' : ''}`}
                 style={{ width: '100%', border: 'none', background: 'none', textAlign: 'left' }}
+                aria-current={activeTab === 'coach' ? 'page' : undefined}
               >
-                <MessageSquareText size={20} />
+                <MessageSquareText size={20} aria-hidden="true" />
                 <span className="nav-label">Eco-Coach</span>
               </button>
             </li>
@@ -261,8 +271,9 @@ function App() {
                 onClick={() => setActiveTab('receipt')} 
                 className={`nav-item ${activeTab === 'receipt' ? 'active' : ''}`}
                 style={{ width: '100%', border: 'none', background: 'none', textAlign: 'left' }}
+                aria-current={activeTab === 'receipt' ? 'page' : undefined}
               >
-                <FileCheck size={20} />
+                <FileCheck size={20} aria-hidden="true" />
                 <span className="nav-label">Receipt Scanner</span>
               </button>
             </li>

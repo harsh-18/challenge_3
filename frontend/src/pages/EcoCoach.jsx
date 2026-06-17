@@ -118,7 +118,7 @@ function EcoCoach({ user }) {
             justifyContent: 'center',
             color: 'var(--accent-mint)'
           }}>
-            <Leaf size={22} className="animate-spin-slow" />
+            <Leaf size={22} className="animate-spin-slow" aria-hidden="true" />
           </div>
           <div>
             <h3 style={{ fontSize: '1.05rem', fontWeight: '700' }}>Eco-Coach</h3>
@@ -143,14 +143,19 @@ function EcoCoach({ user }) {
         overflow: 'hidden',
         position: 'relative'
       }}>
-        <div style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '20px'
-        }}>
+        <div 
+          role="log" 
+          aria-live="polite" 
+          aria-label="Eco-Coach Chat History"
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '20px'
+          }}
+        >
           {messages.map((msg, index) => {
             const isAssistant = msg.role === 'assistant';
             return (
@@ -173,7 +178,7 @@ function EcoCoach({ user }) {
                     color: 'var(--accent-mint)',
                     flexShrink: 0
                   }}>
-                    <Leaf size={16} />
+                    <Leaf size={16} aria-hidden="true" />
                   </div>
                 )}
                 
@@ -275,21 +280,34 @@ function EcoCoach({ user }) {
           background: 'rgba(11, 15, 23, 0.4)'
         }}>
           <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} style={{ display: 'flex', gap: '12px' }}>
+            <label htmlFor="chat-message-input" style={{
+              position: 'absolute',
+              width: '1px',
+              height: '1px',
+              padding: '0',
+              margin: '-1px',
+              overflow: 'hidden',
+              clip: 'rect(0, 0, 0, 0)',
+              border: '0'
+            }}>Ask a question or log a new action</label>
             <input
+              id="chat-message-input"
               type="text"
               className="input-field"
               placeholder="Ask a question or log a new action..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={sending}
+              aria-label="Ask a question or log a new action"
             />
             <button
               type="submit"
               className="btn-primary"
               disabled={sending || !input.trim()}
               style={{ width: '48px', height: '48px', padding: 0, flexShrink: 0 }}
+              aria-label="Send message"
             >
-              <Send size={18} />
+              <Send size={18} aria-hidden="true" />
             </button>
           </form>
         </div>

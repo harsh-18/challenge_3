@@ -93,6 +93,13 @@ function ReceiptUpload({ user }) {
     fileInputRef.current.click();
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      triggerFileInput();
+    }
+  };
+
   const getBadgeColor = (category) => {
     switch (category.toLowerCase()) {
       case 'transit': return 'rgba(59, 130, 246, 0.15)';
@@ -138,6 +145,10 @@ function ReceiptUpload({ user }) {
                 onDragLeave={handleDrag}
                 onDrop={handleDrop}
                 onClick={triggerFileInput}
+                onKeyDown={handleKeyDown}
+                role="button"
+                tabIndex={0}
+                aria-label="Upload utility bill or grocery receipt. Drag and drop file or press enter to browse files."
                 style={{
                   border: '2px dashed rgba(16, 185, 129, 0.25)',
                   borderRadius: '16px',
@@ -155,10 +166,13 @@ function ReceiptUpload({ user }) {
               >
                 <input 
                   type="file" 
+                  id="receipt-file-input"
                   ref={fileInputRef} 
                   style={{ display: 'none' }} 
                   onChange={handleFileChange} 
                   accept="image/jpeg,image/png,image/webp,application/pdf"
+                  aria-hidden="true"
+                  tabIndex={-1}
                 />
                 
                 <div style={{
@@ -171,7 +185,7 @@ function ReceiptUpload({ user }) {
                   justifyContent: 'center',
                   color: 'var(--accent-mint)'
                 }}>
-                  <UploadCloud size={32} />
+                  <UploadCloud size={32} aria-hidden="true" />
                 </div>
                 
                 <div>
