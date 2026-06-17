@@ -6,7 +6,7 @@ EcoSphere AI is a premium, self-contained AI-powered platform designed to help i
 
 ## 🔗 Production Deployments
 
-*   **EcoSphere AI Web App (Frontend)**: [https://genai-apac-2-497615.web.app](https://genai-apac-2-497615.web.app)
+*   **EcoSphere AI Web App (Frontend)**: [https://genai-apac-2-497615.web.app](https://genai-apac-2-497615.web.app, https://ecosphere-ai-app.web.app/)
 *   **FastAPI Backend Gateway**: [https://ecosphere-backend-258208842022.us-central1.run.app](https://ecosphere-backend-258208842022.us-central1.run.app)
 *   **Health Status Endpoint**: [https://ecosphere-backend-258208842022.us-central1.run.app/health](https://ecosphere-backend-258208842022.us-central1.run.app/health)
 *   **Reverse Proxy Gateway Base Route**: [https://genai-apac-2-497615.web.app/api/](https://genai-apac-2-497615.web.app/api/)
