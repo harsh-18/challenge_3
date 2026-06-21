@@ -1,6 +1,72 @@
-import React, { useState, useEffect } from 'react';
-import { Leaf, Send, Car, Zap, UtensilsCrossed, Trash2, ArrowUpRight, ShieldAlert, Sparkles, TrendingDown } from 'lucide-react';
+import React, { useState, useEffect, useCallback, memo } from 'react';
+import { Leaf, Send, Car, Zap, UtensilsCrossed, Trash2, Recycle, ArrowUpRight, ShieldAlert, Sparkles, TrendingDown } from 'lucide-react';
 import { authService } from '../firebase';
+import { API_PATHS, CATEGORY_CONFIG } from '../constants';
+
+/**
+ * Memoized log list item component to prevent unnecessary re-renders
+ * when the parent re-renders (e.g., on new input text changes).
+ */
+const LogListItem = memo(function LogListItem({ log, getCategoryIcon }) {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '16px 24px',
+      borderBottom: '1px solid var(--border-color)',
+      transition: 'var(--transition-smooth)'
+    }} className="log-list-item">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{
+          width: '40px',
+          height: '40px',
+          borderRadius: '10px',
+          background: 'rgba(255,255,255,0.03)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          border: '1px solid var(--border-color)'
+        }} aria-hidden="true">
+          {getCategoryIcon(log.category)}
+        </div>
+        <div>
+          <div style={{ fontWeight: '600', fontSize: '0.95rem' }}>{log.description}</div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+            {new Date(log.timestamp * 1000).toLocaleString(undefined, {
+              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+            })}
+          </div>
+        </div>
+      </div>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ fontWeight: '800', fontSize: '1.05rem', color: '#fff' }}>
+          +{log.carbon_kg} kg
+        </div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+          CO₂e
+        </div>
+      </div>
+    </div>
+  );
+});
+
+/**
+ * Category progress bar component.
+ */
+const CategoryBar = memo(function CategoryBar({ emoji, label, value, percentage, color, formatCo2 }) {
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '4px' }}>
+        <span>{emoji} {label}</span>
+        <strong>{formatCo2(value)}</strong>
+      </div>
+      <div className="category-bar-track" role="progressbar" aria-valuenow={Math.round(percentage)} aria-valuemin={0} aria-valuemax={100} aria-label={`${label} carbon footprint`}>
+        <div className="category-bar-fill" style={{ width: `${percentage}%`, background: color }}></div>
+      </div>
+    </div>
+  );
+});
 
 function Dashboard({ user }) {
   const [logs, setLogs] = useState([]);
@@ -11,16 +77,14 @@ function Dashboard({ user }) {
   const [logging, setLogging] = useState(false);
   const [error, setError] = useState('');
 
-  // Fetch carbon logs and tips on load
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const token = await authService.getAuthToken();
       const headers = { 'Authorization': `Bearer ${token}` };
       
-      // Fetch Logs and Tips in parallel
       const [logsRes, tipsRes] = await Promise.all([
-        fetch('/api/logs', { headers }),
-        fetch('/api/tips', { headers })
+        fetch(API_PATHS.LOGS, { headers }),
+        fetch(API_PATHS.TIPS, { headers })
       ]);
       
       if (logsRes.ok) {
@@ -41,13 +105,13 @@ function Dashboard({ user }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [fetchData]);
 
-  const handleNLSubmit = async (e) => {
+  const handleNLSubmit = useCallback(async (e) => {
     e.preventDefault();
     if (!inputText.trim()) return;
     setLogging(true);
@@ -55,7 +119,7 @@ function Dashboard({ user }) {
 
     try {
       const token = await authService.getAuthToken();
-      const res = await fetch('/api/logs/text', {
+      const res = await fetch(API_PATHS.LOGS_TEXT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -68,51 +132,46 @@ function Dashboard({ user }) {
         throw new Error('Failed to parse and save activity.');
       }
 
-      const result = await res.json();
       setInputText('');
-      
-      // Refresh logs
       await fetchData();
     } catch (err) {
       setError(err.message || 'Logging activity failed.');
     } finally {
       setLogging(false);
     }
-  };
+  }, [inputText, fetchData]);
 
-  const getCategoryIcon = (category) => {
+  const getCategoryIcon = useCallback((category) => {
     switch (category.toLowerCase()) {
       case 'transit': return <Car size={18} style={{ color: 'var(--color-transit)' }} aria-hidden="true" />;
       case 'energy': return <Zap size={18} style={{ color: 'var(--color-energy)' }} aria-hidden="true" />;
       case 'food': return <UtensilsCrossed size={18} style={{ color: 'var(--color-food)' }} aria-hidden="true" />;
-      case 'waste': return <Trash2 size={18} style={{ color: 'var(--color-waste)' }} aria-hidden="true" />;
+      case 'waste': return <Recycle size={18} style={{ color: 'var(--color-waste)' }} aria-hidden="true" />;
       default: return <Leaf size={18} style={{ color: 'var(--accent-emerald)' }} aria-hidden="true" />;
     }
-  };
+  }, []);
 
-  // SVG Donut Chart logic
+  const formatCo2 = useCallback((kg) => {
+    if (kg >= 1000) return `${(kg / 1000).toFixed(1)} tonnes`;
+    return `${kg.toFixed(1)} kg`;
+  }, []);
+
+  // Calculate percentages
   const total = summary.total_carbon_kg || 1;
   const transitVal = summary.categories.transit || 0;
   const energyVal = summary.categories.energy || 0;
   const foodVal = summary.categories.food || 0;
   const wasteVal = summary.categories.waste || 0;
 
-  // Calculate percentages
   const transitPct = (transitVal / total) * 100;
   const energyPct = (energyVal / total) * 100;
   const foodPct = (foodVal / total) * 100;
   const wastePct = (wasteVal / total) * 100;
 
-  // SVG calculations for a simple stacked percentage bar
-  const formatCo2 = (kg) => {
-    if (kg >= 1000) return `${(kg / 1000).toFixed(1)} tonnes`;
-    return `${kg.toFixed(1)} kg`;
-  };
-
   if (loading) {
     return (
-      <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <Leaf className="animate-spin-slow" size={36} style={{ color: 'var(--accent-emerald)' }} />
+      <div style={{ display: 'flex', flex: 1, alignItems: 'center', justifyContent: 'center' }} role="progressbar" aria-label="Loading dashboard data">
+        <Leaf className="animate-spin-slow" size={36} style={{ color: 'var(--accent-emerald)' }} aria-hidden="true" />
       </div>
     );
   }
@@ -133,7 +192,7 @@ function Dashboard({ user }) {
       </div>
 
       {error && (
-        <div className="glass-panel" style={{
+        <div className="glass-panel" role="alert" aria-live="assertive" style={{
           padding: '16px',
           background: 'rgba(239, 68, 68, 0.08)',
           borderColor: 'rgba(239, 68, 68, 0.25)',
@@ -142,7 +201,7 @@ function Dashboard({ user }) {
           gap: '12px',
           color: '#f87171'
         }}>
-          <ShieldAlert size={20} />
+          <ShieldAlert size={20} aria-hidden="true" />
           <span style={{ fontSize: '0.9rem' }}>{error}</span>
         </div>
       )}
@@ -166,58 +225,32 @@ function Dashboard({ user }) {
             alignItems: 'center',
             justifyContent: 'center',
             boxShadow: 'var(--shadow-glow)'
-          }}>
+          }} aria-hidden="true">
             <TrendingDown size={20} style={{ color: 'var(--accent-mint)' }} />
           </div>
           <div>
             <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: '500' }}>TOTAL CARBON LOGGED</div>
-            <div style={{ fontSize: '2rem', fontWeight: '900', color: '#fff', margin: '4px 0' }}>
+            <div style={{ fontSize: '2rem', fontWeight: '900', color: '#fff', margin: '4px 0' }} aria-live="polite">
               {formatCo2(summary.total_carbon_kg)}
             </div>
             <div style={{ color: 'var(--accent-mint)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <Sparkles size={12} />
+              <Sparkles size={12} aria-hidden="true" />
               Target budget: 100 kg CO2e / week
             </div>
           </div>
         </div>
 
         {/* Dynamic Category Summary */}
-        <div className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', justifyGap: '8px' }}>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: '500', marginBottom: '16px' }}>
-            FOOTPRINT BY CATEGORY
-          </div>
+        <div className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column' }}>
+          <h2 style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', fontWeight: '500', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Footprint by Category
+          </h2>
           
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Transit */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '4px' }}>
-                <span>🚗 Travel</span>
-                <strong>{formatCo2(transitVal)}</strong>
-              </div>
-              <div style={{ height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${transitPct}%`, background: 'var(--color-transit)', borderRadius: '3px' }}></div>
-              </div>
-            </div>
-            {/* Energy */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '4px' }}>
-                <span>⚡ Energy</span>
-                <strong>{formatCo2(energyVal)}</strong>
-              </div>
-              <div style={{ height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${energyPct}%`, background: 'var(--color-energy)', borderRadius: '3px' }}></div>
-              </div>
-            </div>
-            {/* Food */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '4px' }}>
-                <span>🥗 Food</span>
-                <strong>{formatCo2(foodVal)}</strong>
-              </div>
-              <div style={{ height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${foodPct}%`, background: 'var(--color-food)', borderRadius: '3px' }}></div>
-              </div>
-            </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }} aria-live="polite">
+            <CategoryBar emoji="🚗" label="Travel" value={transitVal} percentage={transitPct} color="var(--color-transit)" formatCo2={formatCo2} />
+            <CategoryBar emoji="⚡" label="Energy" value={energyVal} percentage={energyPct} color="var(--color-energy)" formatCo2={formatCo2} />
+            <CategoryBar emoji="🥗" label="Food" value={foodVal} percentage={foodPct} color="var(--color-food)" formatCo2={formatCo2} />
+            <CategoryBar emoji="♻️" label="Waste" value={wasteVal} percentage={wastePct} color="var(--color-waste)" formatCo2={formatCo2} />
           </div>
         </div>
       </div>
@@ -228,25 +261,16 @@ function Dashboard({ user }) {
           
           {/* Natural Language Ingest Console */}
           <div className="glass-panel" style={{ padding: '24px' }}>
-            <h3 style={{ fontSize: '1.15rem', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Sparkles size={18} style={{ color: 'var(--accent-mint)' }} />
+            <h2 style={{ fontSize: '1.15rem', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Sparkles size={18} style={{ color: 'var(--accent-mint)' }} aria-hidden="true" />
               Log Activity in Plain English
-            </h3>
+            </h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '20px' }}>
               "Ate a beef steak and drove 35 km in a petrol car today."
             </p>
 
             <form onSubmit={handleNLSubmit} style={{ display: 'flex', gap: '12px' }}>
-              <label htmlFor="nl-activity-input" style={{
-                position: 'absolute',
-                width: '1px',
-                height: '1px',
-                padding: '0',
-                margin: '-1px',
-                overflow: 'hidden',
-                clip: 'rect(0, 0, 0, 0)',
-                border: '0'
-              }}>Log Activity in Plain English</label>
+              <label htmlFor="nl-activity-input" className="sr-only">Log Activity in Plain English</label>
               <input
                 id="nl-activity-input"
                 type="text"
@@ -255,7 +279,6 @@ function Dashboard({ user }) {
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 disabled={logging}
-                aria-label="Log activity in plain English"
               />
               <button 
                 type="submit" 
@@ -273,57 +296,21 @@ function Dashboard({ user }) {
           {/* Recent Logs List */}
           <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
             <div className="card-header">
-              <h3 style={{ fontSize: '1.1rem' }}>Activity History</h3>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              <h2 style={{ fontSize: '1.1rem' }}>Activity History</h2>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }} aria-live="polite">
                 {logs.length} logs recorded
               </span>
             </div>
             
-            <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '420px', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '420px', overflowY: 'auto' }} role="list" aria-label="Carbon activity log history">
               {logs.length === 0 ? (
                 <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                   No activities logged yet. Type something in the input box above or scan a receipt to start!
                 </div>
               ) : (
                 logs.map((log, index) => (
-                  <div key={index} style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '16px 24px',
-                    borderBottom: '1px solid var(--border-color)',
-                    transition: 'var(--transition-smooth)'
-                  }} className="log-list-item">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                      <div style={{
-                        width: '40px',
-                        height: '40px',
-                        borderRadius: '10px',
-                        background: 'rgba(255,255,255,0.03)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        border: '1px solid var(--border-color)'
-                      }}>
-                        {getCategoryIcon(log.category)}
-                      </div>
-                      <div>
-                        <div style={{ fontWeight: '600', fontSize: '0.95rem' }}>{log.description}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                          {new Date(log.timestamp * 1000).toLocaleString(undefined, {
-                            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: '800', fontSize: '1.05rem', color: '#fff' }}>
-                        +{log.carbon_kg} kg
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                        CO₂e
-                      </div>
-                    </div>
+                  <div role="listitem" key={log.id || index}>
+                    <LogListItem log={log} getCategoryIcon={getCategoryIcon} />
                   </div>
                 ))
               )}
@@ -336,12 +323,12 @@ function Dashboard({ user }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
           
           <div className="glass-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Leaf size={18} style={{ color: 'var(--accent-emerald)' }} />
+            <h2 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Leaf size={18} style={{ color: 'var(--accent-emerald)' }} aria-hidden="true" />
               Eco Recommendations
-            </h3>
+            </h2>
             
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }} aria-live="polite">
               {tips.map((tip, index) => (
                 <div key={index} className="glass-panel" style={{
                   padding: '16px',
@@ -357,7 +344,7 @@ function Dashboard({ user }) {
                     padding: '4px',
                     borderRadius: '50%',
                     display: 'flex'
-                  }}>
+                  }} aria-hidden="true">
                     <ArrowUpRight size={14} />
                   </div>
                   <span style={{ fontSize: '0.85rem', lineHeight: '1.4', color: 'var(--text-primary)' }}>

@@ -1,6 +1,116 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { Leaf, Send } from 'lucide-react';
 import { authService } from '../firebase';
+import { API_PATHS, CHAT_SUGGESTIONS } from '../constants';
+
+/**
+ * Memoized chat message bubble component.
+ * Prevents re-rendering the entire message list when a new message arrives.
+ */
+const ChatMessage = memo(function ChatMessage({ msg, user }) {
+  const isAssistant = msg.role === 'assistant';
+
+  return (
+    <div style={{
+      display: 'flex',
+      justifyContent: isAssistant ? 'flex-start' : 'flex-end',
+      alignItems: 'flex-start',
+      gap: '12px',
+      width: '100%'
+    }}>
+      {isAssistant && (
+        <div style={{
+          width: '32px',
+          height: '32px',
+          borderRadius: '50%',
+          background: 'rgba(16, 185, 129, 0.1)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--accent-mint)',
+          flexShrink: 0
+        }} aria-hidden="true">
+          <Leaf size={16} />
+        </div>
+      )}
+      
+      <div style={{
+        maxWidth: '75%',
+        padding: '16px',
+        borderRadius: '16px',
+        fontSize: '0.92rem',
+        lineHeight: '1.5',
+        whiteSpace: 'pre-line',
+        background: isAssistant ? 'rgba(255, 255, 255, 0.02)' : 'linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan))',
+        color: isAssistant ? 'var(--text-primary)' : '#fff',
+        border: isAssistant ? '1px solid var(--border-color)' : 'none',
+        borderTopLeftRadius: isAssistant ? '4px' : '16px',
+        borderTopRightRadius: isAssistant ? '16px' : '4px',
+        boxShadow: isAssistant ? 'none' : '0 4px 12px rgba(16, 185, 129, 0.2)'
+      }}>
+        {parseMarkdown(msg.content)}
+      </div>
+      
+      {!isAssistant && (
+        <div style={{
+          width: '32px',
+          height: '32px',
+          borderRadius: '50%',
+          background: 'linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan))',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#fff',
+          fontWeight: 'bold',
+          fontSize: '0.8rem',
+          flexShrink: 0
+        }} aria-hidden="true">
+          {user.displayName ? user.displayName[0].toUpperCase() : 'U'}
+        </div>
+      )}
+    </div>
+  );
+});
+
+/**
+ * Parse basic markdown formatting into React elements.
+ * Handles **bold**, bullet points (•), and line breaks.
+ */
+function parseMarkdown(text) {
+  if (!text) return text;
+
+  // Split by lines first to handle bullet points and line breaks
+  const lines = text.split('\n');
+  const elements = [];
+
+  lines.forEach((line, lineIdx) => {
+    if (lineIdx > 0) {
+      elements.push(<br key={`br-${lineIdx}`} />);
+    }
+
+    // Process bold markers within each line
+    const parts = line.split(/(\*\*.*?\*\*)/g);
+    parts.forEach((part, partIdx) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        elements.push(
+          <strong key={`${lineIdx}-${partIdx}`} style={{ color: '#fff' }}>
+            {part.slice(2, -2)}
+          </strong>
+        );
+      } else if (part.startsWith('• ') || part.startsWith('- ')) {
+        elements.push(
+          <span key={`${lineIdx}-${partIdx}`} style={{ display: 'block', margin: '4px 0', paddingLeft: '8px' }}>
+            {part}
+          </span>
+        );
+      } else {
+        elements.push(part);
+      }
+    });
+  });
+
+  return elements;
+}
 
 function EcoCoach({ user }) {
   const [messages, setMessages] = useState([
@@ -15,27 +125,26 @@ function EcoCoach({ user }) {
   
   const messagesEndRef = useRef(null);
 
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, scrollToBottom]);
 
-  const handleSendMessage = async (textToSend) => {
+  const handleSendMessage = useCallback(async (textToSend) => {
     const text = textToSend || input;
     if (!text.trim() || sending) return;
 
     if (!textToSend) setInput('');
     setSending(true);
 
-    // Append user message
     setMessages((prev) => [...prev, { role: 'user', content: text }]);
 
     try {
       const token = await authService.getAuthToken();
-      const res = await fetch('/api/chat', {
+      const res = await fetch(API_PATHS.CHAT, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -52,8 +161,6 @@ function EcoCoach({ user }) {
       }
 
       const data = await res.json();
-      
-      // Append assistant reply
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }]);
     } catch (err) {
       console.error(err);
@@ -64,33 +171,16 @@ function EcoCoach({ user }) {
     } finally {
       setSending(false);
     }
-  };
+  }, [input, sending, sessionId]);
 
-  const handleSuggestionClick = (suggestion) => {
+  const handleFormSubmit = useCallback((e) => {
+    e.preventDefault();
+    handleSendMessage();
+  }, [handleSendMessage]);
+
+  const handleSuggestionClick = useCallback((suggestion) => {
     handleSendMessage(suggestion);
-  };
-
-  const parseMarkdown = (text) => {
-    // Basic helper to convert markdown double-asterisk to bold tags and linebreaks
-    const parts = text.split(/(\*\*.*?\*\*)/g);
-    return parts.map((part, index) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={index} style={{ color: '#fff' }}>{part.slice(2, -2)}</strong>;
-      }
-      // Replace bullet points
-      if (part.startsWith('•')) {
-        return <span key={index} style={{ display: 'block', margin: '4px 0' }}>{part}</span>;
-      }
-      return part;
-    });
-  };
-
-  const suggestions = [
-    "How can I reduce food emissions?",
-    "Tips to lower my electricity bill?",
-    "Is driving an EV actually eco-friendly?",
-    "Recommend a green lifestyle habit."
-  ];
+  }, [handleSendMessage]);
 
   return (
     <div style={{
@@ -117,18 +207,19 @@ function EcoCoach({ user }) {
             alignItems: 'center',
             justifyContent: 'center',
             color: 'var(--accent-mint)'
-          }}>
-            <Leaf size={22} className="animate-spin-slow" aria-hidden="true" />
+          }} aria-hidden="true">
+            <Leaf size={22} className="animate-spin-slow" />
           </div>
           <div>
-            <h3 style={{ fontSize: '1.05rem', fontWeight: '700' }}>Eco-Coach</h3>
+            <h1 style={{ fontSize: '1.05rem', fontWeight: '700' }}>Eco-Coach</h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
               <span className="pulse-glow" style={{
                 width: '6px',
                 height: '6px',
                 background: 'var(--accent-mint)',
-                borderRadius: '50%'
-              }}></span>
+                borderRadius: '50%',
+                display: 'inline-block'
+              }} aria-hidden="true"></span>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Gemini AI Consultant</span>
             </div>
           </div>
@@ -156,72 +247,12 @@ function EcoCoach({ user }) {
             gap: '20px'
           }}
         >
-          {messages.map((msg, index) => {
-            const isAssistant = msg.role === 'assistant';
-            return (
-              <div key={index} style={{
-                display: 'flex',
-                justifyContent: isAssistant ? 'flex-start' : 'flex-end',
-                alignItems: 'flex-start',
-                gap: '12px',
-                width: '100%'
-              }}>
-                {isAssistant && (
-                  <div style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    background: 'rgba(16, 185, 129, 0.1)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'var(--accent-mint)',
-                    flexShrink: 0
-                  }}>
-                    <Leaf size={16} aria-hidden="true" />
-                  </div>
-                )}
-                
-                <div style={{
-                  maxWidth: '75%',
-                  padding: '16px',
-                  borderRadius: '16px',
-                  fontSize: '0.92rem',
-                  lineHeight: '1.5',
-                  whiteSpace: 'pre-line',
-                  background: isAssistant ? 'rgba(255, 255, 255, 0.02)' : 'linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan))',
-                  color: isAssistant ? 'var(--text-primary)' : '#fff',
-                  border: isAssistant ? '1px solid var(--border-color)' : 'none',
-                  borderTopLeftRadius: isAssistant ? '4px' : '16px',
-                  borderTopRightRadius: isAssistant ? '16px' : '4px',
-                  boxShadow: isAssistant ? 'none' : '0 4px 12px rgba(16, 185, 129, 0.2)'
-                }}>
-                  {parseMarkdown(msg.content)}
-                </div>
-                
-                {!isAssistant && (
-                  <div style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    background: 'linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan))',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#fff',
-                    fontWeight: 'bold',
-                    fontSize: '0.8rem',
-                    flexShrink: 0
-                  }}>
-                    {user.displayName ? user.displayName[0].toUpperCase() : 'U'}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {messages.map((msg, index) => (
+            <ChatMessage key={index} msg={msg} user={user} />
+          ))}
           
           {sending && (
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }} role="status" aria-label="Eco-Coach is typing">
               <div style={{
                 width: '32px',
                 height: '32px',
@@ -231,13 +262,13 @@ function EcoCoach({ user }) {
                 alignItems: 'center',
                 justifyContent: 'center',
                 color: 'var(--accent-mint)'
-              }}>
+              }} aria-hidden="true">
                 <Leaf size={16} />
               </div>
               <div className="typing-indicator glass-panel" style={{ padding: '12px 18px', borderTopLeftRadius: '4px' }}>
-                <span className="typing-dot"></span>
-                <span className="typing-dot"></span>
-                <span className="typing-dot"></span>
+                <span className="typing-dot" aria-hidden="true"></span>
+                <span className="typing-dot" aria-hidden="true"></span>
+                <span className="typing-dot" aria-hidden="true"></span>
               </div>
             </div>
           )}
@@ -253,8 +284,8 @@ function EcoCoach({ user }) {
             flexWrap: 'wrap',
             gap: '10px',
             marginBottom: '16px'
-          }}>
-            {suggestions.map((sug, i) => (
+          }} role="group" aria-label="Suggested questions">
+            {CHAT_SUGGESTIONS.map((sug, i) => (
               <button
                 key={i}
                 onClick={() => handleSuggestionClick(sug)}
@@ -266,6 +297,7 @@ function EcoCoach({ user }) {
                   cursor: 'pointer',
                   borderColor: 'rgba(16, 185, 129, 0.15)'
                 }}
+                aria-label={`Ask: ${sug}`}
               >
                 {sug}
               </button>
@@ -279,17 +311,8 @@ function EcoCoach({ user }) {
           borderTop: '1px solid var(--border-color)',
           background: 'rgba(11, 15, 23, 0.4)'
         }}>
-          <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} style={{ display: 'flex', gap: '12px' }}>
-            <label htmlFor="chat-message-input" style={{
-              position: 'absolute',
-              width: '1px',
-              height: '1px',
-              padding: '0',
-              margin: '-1px',
-              overflow: 'hidden',
-              clip: 'rect(0, 0, 0, 0)',
-              border: '0'
-            }}>Ask a question or log a new action</label>
+          <form onSubmit={handleFormSubmit} style={{ display: 'flex', gap: '12px' }}>
+            <label htmlFor="chat-message-input" className="sr-only">Ask a question or log a new action</label>
             <input
               id="chat-message-input"
               type="text"
@@ -298,7 +321,6 @@ function EcoCoach({ user }) {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={sending}
-              aria-label="Ask a question or log a new action"
             />
             <button
               type="submit"

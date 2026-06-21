@@ -1,9 +1,13 @@
+"""Gemini AI operations service for carbon footprint estimation and eco-coaching."""
 import json
+import logging
 import re
 import unicodedata
 from typing import List, Dict, Any, Optional
 from backend.config import settings
 from backend.services.carbon_calc import calculate_footprint
+
+logger = logging.getLogger(__name__)
 
 # Try importing the new Google GenAI SDK
 try:
@@ -58,33 +62,33 @@ class GeminiService:
         if not self.mock_mode and GENAI_AVAILABLE and (settings.GEMINI_API_KEY or settings.ENV == "production"):
             try:
                 api_key = _sanitize_text(settings.GEMINI_API_KEY)
+                http_options = types.HttpOptions(timeout=10000)  # 10s timeout
                 if api_key:
-                    self.client = genai.Client(api_key=api_key)
+                    self.client = genai.Client(api_key=api_key, http_options=http_options)
                 else:
-                    self.client = genai.Client(vertexai=True, project=settings.PROJECT_ID, location="us-central1")
-                print(f"✅ Gemini client initialized. Model: {self.MODEL_FLASH}")
+                    self.client = genai.Client(vertexai=True, project=settings.PROJECT_ID, location="us-central1", http_options=http_options)
+                logger.info("Gemini client initialized. Model: %s", self.MODEL_FLASH)
             except Exception as e:
-                print(f"⚠️ Gemini init failed: {e}")
+                logger.warning("Gemini init failed: %s", e)
                 self.client = None
         
         # Priority 2: Try Groq as fallback
         if self.client is None and not self.mock_mode and GROQ_AVAILABLE and settings.GROQ_API_KEY:
             try:
                 groq_key = _sanitize_text(settings.GROQ_API_KEY)
-                self.groq_client = Groq(api_key=groq_key)
+                self.groq_client = Groq(api_key=groq_key, timeout=10.0)  # 10s timeout
                 self.using_groq = True
-                print(f"✅ Groq fallback initialized. Model: {self.GROQ_MODEL}")
+                logger.info("Groq fallback initialized. Model: %s", self.GROQ_MODEL)
             except Exception as e:
-                print(f"⚠️ Groq init failed: {e}")
+                logger.warning("Groq init failed: %s", e)
                 self.groq_client = None
         
         # If neither provider is available, enter mock mode
         if self.client is None and self.groq_client is None:
             self.mock_mode = True
             if not settings.USE_MOCK_SERVICES:
-                print("⚠️ No LLM provider available. Running in mock mode.")
-                print("   Set GEMINI_API_KEY or GROQ_API_KEY in your .env file.")
-                print("   Get a free Groq key at: https://console.groq.com")
+                logger.warning("No LLM provider available. Running in mock mode. "
+                               "Set GEMINI_API_KEY or GROQ_API_KEY in your .env file.")
 
     # --- GROQ FALLBACK HELPERS ---
     
@@ -104,7 +108,7 @@ class GeminiService:
             )
             return response.choices[0].message.content
         except Exception as e:
-            print(f"Groq API error: {e}")
+            logger.error("Groq API error: %s", e)
             return None
     
     def _groq_generate_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> Optional[Any]:
@@ -125,7 +129,7 @@ class GeminiService:
             raw = response.choices[0].message.content.strip()
             return json.loads(raw)
         except Exception as e:
-            print(f"Groq JSON API error: {e}")
+            logger.error("Groq JSON API error: %s", e)
             return None
 
     # --- MAIN API METHODS ---
@@ -171,7 +175,7 @@ class GeminiService:
                 )
                 activities = json.loads(response.text.strip())
             except Exception as e:
-                print(f"Gemini parse_log failed: {e}")
+                logger.error("Gemini parse_log failed: %s", e)
         
         # Try Groq fallback
         if activities is None and self.groq_client:
@@ -197,7 +201,7 @@ class GeminiService:
             return activities
         
         # Final fallback to mock
-        print("All LLM providers failed for parse_log. Using mock parser.")
+        logger.warning("All LLM providers failed for parse_log. Using mock parser.")
         return self._mock_parse_natural_language(text)
 
     def parse_receipt(self, file_bytes: bytes, file_mime: str) -> Dict[str, Any]:
@@ -268,7 +272,7 @@ class GeminiService:
             parsed["estimated_total_carbon_kg"] = round(total_carbon, 2)
             return parsed
         except Exception as e:
-            print(f"Error parsing receipt with Gemini Flash: {e}. Falling back to mock receipt OCR.")
+            logger.error("Error parsing receipt with Gemini Flash: %s. Falling back to mock receipt OCR.", e)
             return self._mock_parse_receipt(file_mime)
 
     def generate_coaching_response(self, message: str, chat_history: List[Dict[str, str]], tips: List[str], current_score_kg: float) -> str:
@@ -350,7 +354,7 @@ Respond naturally and helpfully. Remember: answer their question FIRST, then off
                 )
                 return response.text
         except Exception as e:
-            print(f"Gemini coaching failed: {e}")
+            logger.error("Gemini coaching failed: %s", e)
         
         # Try Groq fallback
         if self.groq_client:

@@ -1,6 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { UploadCloud, FileText, CheckCircle2, AlertCircle, Sparkles, RefreshCw, BarChart2 } from 'lucide-react';
 import { authService } from '../firebase';
+import { API_PATHS, UPLOAD_CONFIG } from '../constants';
 
 function ReceiptUpload({ user }) {
   const [file, setFile] = useState(null);
@@ -11,7 +12,7 @@ function ReceiptUpload({ user }) {
   
   const fileInputRef = useRef(null);
 
-  const handleDrag = (e) => {
+  const handleDrag = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
     if (e.type === "dragenter" || e.type === "dragover") {
@@ -19,42 +20,39 @@ function ReceiptUpload({ user }) {
     } else if (e.type === "dragleave") {
       setDragActive(false);
     }
-  };
+  }, []);
 
-  const handleDrop = (e) => {
+  const handleDrop = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
     
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0];
-      validateAndSetFile(droppedFile);
+      validateAndSetFile(e.dataTransfer.files[0]);
     }
-  };
+  }, []);
 
-  const handleFileChange = (e) => {
+  const handleFileChange = useCallback((e) => {
     if (e.target.files && e.target.files[0]) {
       validateAndSetFile(e.target.files[0]);
     }
-  };
+  }, []);
 
-  const validateAndSetFile = (selectedFile) => {
+  const validateAndSetFile = useCallback((selectedFile) => {
     setError('');
     setResult(null);
-    const validTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
-    if (!validTypes.includes(selectedFile.type)) {
-      setError('Invalid file format. Please upload a JPG, PNG, WEBP, or PDF.');
+    if (!UPLOAD_CONFIG.ALLOWED_TYPES.includes(selectedFile.type)) {
+      setError(`Invalid file format. Please upload a ${UPLOAD_CONFIG.ALLOWED_EXTENSIONS} file.`);
       return;
     }
-    // Limit file size to 8MB
-    if (selectedFile.size > 8 * 1024 * 1024) {
-      setError('File is too large. Limit is 8 MB.');
+    if (selectedFile.size > UPLOAD_CONFIG.MAX_SIZE_MB * 1024 * 1024) {
+      setError(`File is too large. Maximum size is ${UPLOAD_CONFIG.MAX_SIZE_MB} MB.`);
       return;
     }
     setFile(selectedFile);
-  };
+  }, []);
 
-  const handleUploadSubmit = async (e) => {
+  const handleUploadSubmit = useCallback(async (e) => {
     e.preventDefault();
     if (!file || uploading) return;
     setUploading(true);
@@ -66,7 +64,7 @@ function ReceiptUpload({ user }) {
 
     try {
       const token = await authService.getAuthToken();
-      const res = await fetch('/api/logs/receipt', {
+      const res = await fetch(API_PATHS.LOGS_RECEIPT, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -80,27 +78,31 @@ function ReceiptUpload({ user }) {
 
       const data = await res.json();
       setResult(data);
-      setFile(null); // Reset
+      setFile(null);
     } catch (err) {
       console.error(err);
       setError(err.message || 'Error processing receipt upload.');
     } finally {
       setUploading(false);
     }
-  };
+  }, [file, uploading]);
 
-  const triggerFileInput = () => {
+  const triggerFileInput = useCallback(() => {
     fileInputRef.current.click();
-  };
+  }, []);
 
-  const handleKeyDown = (e) => {
+  const handleKeyDown = useCallback((e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       triggerFileInput();
     }
-  };
+  }, [triggerFileInput]);
 
-  const getBadgeColor = (category) => {
+  const handleScanAnother = useCallback(() => {
+    setResult(null);
+  }, []);
+
+  const getBadgeColor = useCallback((category) => {
     switch (category.toLowerCase()) {
       case 'transit': return 'rgba(59, 130, 246, 0.15)';
       case 'energy': return 'rgba(234, 179, 8, 0.15)';
@@ -108,9 +110,9 @@ function ReceiptUpload({ user }) {
       case 'waste': return 'rgba(168, 85, 247, 0.15)';
       default: return 'rgba(255, 255, 255, 0.05)';
     }
-  };
+  }, []);
 
-  const getTextColor = (category) => {
+  const getTextColor = useCallback((category) => {
     switch (category.toLowerCase()) {
       case 'transit': return 'var(--color-transit)';
       case 'energy': return 'var(--color-energy)';
@@ -118,7 +120,7 @@ function ReceiptUpload({ user }) {
       case 'waste': return 'var(--color-waste)';
       default: return 'var(--text-secondary)';
     }
-  };
+  }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '32px', width: '100%', maxWidth: '960px', margin: '0 auto' }}>
@@ -148,7 +150,8 @@ function ReceiptUpload({ user }) {
                 onKeyDown={handleKeyDown}
                 role="button"
                 tabIndex={0}
-                aria-label="Upload utility bill or grocery receipt. Drag and drop file or press enter to browse files."
+                aria-label={file ? `Selected file: ${file.name}. Press Enter to change file.` : 'Upload utility bill or grocery receipt. Drag and drop file or press Enter to browse files.'}
+                aria-describedby="upload-format-hint"
                 style={{
                   border: '2px dashed rgba(16, 185, 129, 0.25)',
                   borderRadius: '16px',
@@ -170,7 +173,7 @@ function ReceiptUpload({ user }) {
                   ref={fileInputRef} 
                   style={{ display: 'none' }} 
                   onChange={handleFileChange} 
-                  accept="image/jpeg,image/png,image/webp,application/pdf"
+                  accept={UPLOAD_CONFIG.ALLOWED_TYPES.join(',')}
                   aria-hidden="true"
                   tabIndex={-1}
                 />
@@ -184,22 +187,22 @@ function ReceiptUpload({ user }) {
                   alignItems: 'center',
                   justifyContent: 'center',
                   color: 'var(--accent-mint)'
-                }}>
-                  <UploadCloud size={32} aria-hidden="true" />
+                }} aria-hidden="true">
+                  <UploadCloud size={32} />
                 </div>
                 
                 <div>
                   <strong style={{ display: 'block', marginBottom: '4px' }}>
                     {file ? file.name : 'Drag & Drop your receipt here'}
                   </strong>
-                  <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    {file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : 'Supports JPG, PNG, WEBP, and PDF bills (Max 8MB)'}
+                  <span id="upload-format-hint" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    {file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : `Supports ${UPLOAD_CONFIG.ALLOWED_EXTENSIONS} bills (Max ${UPLOAD_CONFIG.MAX_SIZE_MB}MB)`}
                   </span>
                 </div>
               </div>
 
               {error && (
-                <div style={{
+                <div role="alert" aria-live="assertive" style={{
                   background: 'rgba(239, 68, 68, 0.08)',
                   border: '1px solid rgba(239, 68, 68, 0.2)',
                   color: '#f87171',
@@ -210,7 +213,7 @@ function ReceiptUpload({ user }) {
                   alignItems: 'center',
                   gap: '8px'
                 }}>
-                  <AlertCircle size={18} />
+                  <AlertCircle size={18} aria-hidden="true" />
                   {error}
                 </div>
               )}
@@ -220,15 +223,16 @@ function ReceiptUpload({ user }) {
                 className="btn-primary" 
                 disabled={!file || uploading}
                 style={{ width: '100%', height: '48px' }}
+                aria-label={uploading ? 'Scanning receipt with Gemini AI' : 'Analyze receipt with Gemini OCR'}
               >
                 {uploading ? (
                   <>
-                    <RefreshCw className="animate-spin" size={18} style={{ animation: 'spin 1.5s linear infinite' }} />
+                    <RefreshCw className="animate-spin" size={18} style={{ animation: 'spin 1.5s linear infinite' }} aria-hidden="true" />
                     Gemini Scanning & Calculating...
                   </>
                 ) : (
                   <>
-                    <Sparkles size={18} />
+                    <Sparkles size={18} aria-hidden="true" />
                     Analyze with Gemini OCR
                   </>
                 )}
@@ -240,10 +244,10 @@ function ReceiptUpload({ user }) {
         {/* Info panel */}
         {!result && !uploading && (
           <div className="glass-panel" style={{ padding: '32px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <h3 style={{ fontSize: '1.2rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <FileText size={20} style={{ color: 'var(--accent-mint)' }} />
+            <h2 style={{ fontSize: '1.2rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <FileText size={20} style={{ color: 'var(--accent-mint)' }} aria-hidden="true" />
               How it works
-            </h3>
+            </h2>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
               <div>
@@ -252,7 +256,7 @@ function ReceiptUpload({ user }) {
               </div>
               <div>
                 <strong style={{ color: '#fff', display: 'block', marginBottom: '4px' }}>2. Multimodal Structured OCR</strong>
-                Gemini 1.5 Flash parses the billing details, identifying items, consumption numbers (e.g. 120 kWh), and stores.
+                Gemini 2.0 Flash parses the billing details, identifying items, consumption numbers (e.g. 120 kWh), and stores.
               </div>
               <div>
                 <strong style={{ color: '#fff', display: 'block', marginBottom: '4px' }}>3. Instant Carbon Calculations</strong>
@@ -269,7 +273,7 @@ function ReceiptUpload({ user }) {
                 fontSize: '0.82rem',
                 color: 'var(--accent-mint)',
                 lineHeight: '1.4'
-              }}>
+              }} role="note">
                 💡 <strong>Mock Mode Tip:</strong> Since local mock mode is active, uploading any file will instantly generate a simulated, structured electricity bill or grocery receipt result for testing! Try it out!
               </div>
             )}
@@ -278,13 +282,13 @@ function ReceiptUpload({ user }) {
 
         {/* Uploading Status View */}
         {uploading && (
-          <div className="glass-panel" style={{ padding: '60px 40px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
-            <RefreshCw size={48} className="animate-spin-slow" style={{ color: 'var(--accent-mint)', animation: 'spin 3s linear infinite' }} />
+          <div className="glass-panel" role="status" aria-live="polite" style={{ padding: '60px 40px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
+            <RefreshCw size={48} className="animate-spin-slow" style={{ color: 'var(--accent-mint)', animation: 'spin 3s linear infinite' }} aria-hidden="true" />
             <div>
-              <h3 style={{ fontSize: '1.3rem', color: '#fff', marginBottom: '8px' }}>Processing Bill Statement</h3>
+              <h2 style={{ fontSize: '1.3rem', color: '#fff', marginBottom: '8px' }}>Processing Bill Statement</h2>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Gemini is digitizing items and calculating carbon values...</p>
             </div>
-            <div style={{ width: '100%', maxWidth: '300px', height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
+            <div style={{ width: '100%', maxWidth: '300px', height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }} role="progressbar" aria-label="Processing receipt">
               <div style={{ height: '100%', width: '60%', background: 'linear-gradient(90deg, var(--accent-emerald), var(--accent-cyan))', borderRadius: '2px', animation: 'pulse-glow 1s infinite alternate' }}></div>
             </div>
           </div>
@@ -321,15 +325,15 @@ function ReceiptUpload({ user }) {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center'
-                }}>
+                }} aria-hidden="true">
                   <BarChart2 size={22} />
                 </div>
                 <div>
-                  <h4 style={{ fontSize: '0.95rem', fontWeight: '700' }}>Estimated Carbon Cost</h4>
+                  <h3 style={{ fontSize: '0.95rem', fontWeight: '700' }}>Estimated Carbon Cost</h3>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Automatically committed to your logs</p>
                 </div>
               </div>
-              <div style={{ fontSize: '1.8rem', fontWeight: '900', color: 'var(--accent-mint)' }}>
+              <div style={{ fontSize: '1.8rem', fontWeight: '900', color: 'var(--accent-mint)' }} aria-live="polite">
                 {result.estimated_total_carbon_kg} kg <span style={{ fontSize: '0.9rem', fontWeight: '400', color: 'var(--text-secondary)' }}>CO₂e</span>
               </div>
             </div>
@@ -338,14 +342,14 @@ function ReceiptUpload({ user }) {
             <div>
               <h3 style={{ fontSize: '1.1rem', color: '#fff', marginBottom: '16px' }}>Extracted Items & Parameters</h3>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }} aria-label="Extracted receipt items and carbon calculations">
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-                      <th style={{ padding: '12px 8px' }}>Item Name</th>
-                      <th style={{ padding: '12px 8px' }}>Quantity</th>
-                      <th style={{ padding: '12px 8px' }}>Price</th>
-                      <th style={{ padding: '12px 8px' }}>Category</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'right' }}>Carbon (CO₂e)</th>
+                      <th scope="col" style={{ padding: '12px 8px' }}>Item Name</th>
+                      <th scope="col" style={{ padding: '12px 8px' }}>Quantity</th>
+                      <th scope="col" style={{ padding: '12px 8px' }}>Price</th>
+                      <th scope="col" style={{ padding: '12px 8px' }}>Category</th>
+                      <th scope="col" style={{ padding: '12px 8px', textAlign: 'right' }}>Carbon (CO₂e)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -380,7 +384,7 @@ function ReceiptUpload({ user }) {
             </div>
 
             {/* Success banner */}
-            <div style={{
+            <div role="status" aria-live="polite" style={{
               background: 'rgba(16, 185, 129, 0.06)',
               border: '1px solid rgba(16, 185, 129, 0.25)',
               borderRadius: '12px',
@@ -390,12 +394,12 @@ function ReceiptUpload({ user }) {
               justifyContent: 'space-between'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <CheckCircle2 size={20} style={{ color: 'var(--accent-mint)' }} />
+                <CheckCircle2 size={20} style={{ color: 'var(--accent-mint)' }} aria-hidden="true" />
                 <span style={{ fontSize: '0.85rem', color: '#fff' }}>
                   Successfully synced {result.saved_logs.length} carbon log items to your database!
                 </span>
               </div>
-              <button onClick={() => setResult(null)} className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>
+              <button onClick={handleScanAnother} className="btn-secondary" style={{ padding: '6px 12px', fontSize: '0.8rem' }}>
                 Scan Another
               </button>
             </div>

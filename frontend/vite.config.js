@@ -14,4 +14,23 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    // Enable source maps for production debugging
+    sourcemap: false,
+    // Optimize chunk splitting for better caching
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          icons: ['lucide-react'],
+        },
+      },
+    },
+    // Reduce chunk size warnings threshold
+    chunkSizeWarningLimit: 500,
+    // Minification
+    minify: 'esbuild',
+    // Target modern browsers for smaller bundles
+    target: 'es2020',
+  },
 });

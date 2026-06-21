@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Leaf, LogOut, LayoutDashboard, MessageSquareText, FileCheck } from 'lucide-react';
 import { authService } from './firebase';
 import Dashboard from './pages/Dashboard';
@@ -9,13 +9,12 @@ function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [authMode, setAuthMode] = useState('login'); // login, signup
+  const [authMode, setAuthMode] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
 
   useEffect(() => {
-    // Listen to Auth state changes
     const unsubscribe = authService.onAuthStateChanged((currentUser) => {
       setUser(currentUser);
       setLoading(false);
@@ -23,14 +22,14 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  const handleEmailAuth = async (e) => {
+  const handleEmailAuth = useCallback(async (e) => {
     e.preventDefault();
     setAuthError('');
     if (!email || !password) {
       setAuthError('Please fill in all fields.');
       return;
     }
-    
+
     try {
       if (authMode === 'login') {
         await authService.signInWithEmail(email, password);
@@ -40,21 +39,25 @@ function App() {
     } catch (err) {
       setAuthError(err.message || 'Authentication failed.');
     }
-  };
+  }, [email, password, authMode]);
 
-  const handleGoogleAuth = async () => {
+  const handleGoogleAuth = useCallback(async () => {
     setAuthError('');
     try {
       await authService.signInWithGoogle();
     } catch (err) {
       setAuthError(err.message || 'Google Sign-in failed.');
     }
-  };
+  }, []);
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     await authService.signOut();
     setActiveTab('dashboard');
-  };
+  }, []);
+
+  const handleTabChange = useCallback((tab) => {
+    setActiveTab(tab);
+  }, []);
 
   if (loading) {
     return (
@@ -123,7 +126,7 @@ function App() {
               borderRadius: '8px',
               fontSize: '0.85rem',
               textAlign: 'center'
-            }} role="alert">
+            }} role="alert" aria-live="assertive">
               {authError}
             </div>
           )}
@@ -139,6 +142,7 @@ function App() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                autoComplete="email"
               />
             </div>
 
@@ -152,6 +156,7 @@ function App() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
               />
             </div>
 
@@ -181,7 +186,7 @@ function App() {
             justifyContent: 'center',
             gap: '10px'
           }}>
-            <svg width="18" height="18" viewBox="0 0 24 24">
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
               <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.92h6.69c-.29 1.5-.1.88-1.5 2.11v2.53h2.42c1.42-1.3 2.23-3.2 2.23-5.49z"/>
               <path fill="#34A853" d="M12 24c3.24 0 5.97-1.08 7.96-2.91l-2.42-2.53c-.78.52-1.8.83-2.92.83-3.22 0-5.95-2.18-6.93-5.1H5.16v2.62C7.14 20.89 9.38 24 12 24z"/>
               <path fill="#FBBC05" d="M5.07 14.29c-.25-.76-.39-1.57-.39-2.41s.14-1.65.39-2.41V6.85H5.16a11.96 11.96 0 000 9.87l-.09-.25z"/>
@@ -199,7 +204,7 @@ function App() {
               padding: '8px',
               borderRadius: '6px',
               border: '1px dashed rgba(52, 211, 153, 0.2)'
-            }}>
+            }} role="note">
               💡 <strong>Local Mock Mode Enabled</strong>. Enter any credentials to log in instantly!
             </div>
           )}
@@ -208,22 +213,42 @@ function App() {
             {authMode === 'login' ? (
               <>
                 New to EcoSphere?{' '}
-                <span 
-                  onClick={() => setAuthMode('signup')} 
-                  style={{ color: '#34d399', cursor: 'pointer', fontWeight: '600' }}
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('signup')}
+                  style={{
+                    color: '#34d399',
+                    cursor: 'pointer',
+                    fontWeight: '600',
+                    background: 'none',
+                    border: 'none',
+                    fontSize: 'inherit',
+                    fontFamily: 'inherit',
+                    padding: 0
+                  }}
                 >
                   Create an account
-                </span>
+                </button>
               </>
             ) : (
               <>
                 Already have an account?{' '}
-                <span 
-                  onClick={() => setAuthMode('login')} 
-                  style={{ color: '#34d399', cursor: 'pointer', fontWeight: '600' }}
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('login')}
+                  style={{
+                    color: '#34d399',
+                    cursor: 'pointer',
+                    fontWeight: '600',
+                    background: 'none',
+                    border: 'none',
+                    fontSize: 'inherit',
+                    fontFamily: 'inherit',
+                    padding: 0
+                  }}
                 >
                   Sign In
-                </span>
+                </button>
               </>
             )}
           </div>
@@ -235,6 +260,11 @@ function App() {
   // --- MAIN APPLICATION VIEW ---
   return (
     <div className="app-container">
+      {/* Skip to Content Link for keyboard users */}
+      <a href="#main-content" className="skip-to-content">
+        Skip to main content
+      </a>
+
       {/* Sidebar Navigation */}
       <aside className="sidebar" aria-label="Application Navigation">
         <div className="logo">
@@ -246,7 +276,7 @@ function App() {
           <ul className="nav-menu">
             <li>
               <button 
-                onClick={() => setActiveTab('dashboard')} 
+                onClick={() => handleTabChange('dashboard')} 
                 className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
                 style={{ width: '100%', border: 'none', background: 'none', textAlign: 'left' }}
                 aria-current={activeTab === 'dashboard' ? 'page' : undefined}
@@ -257,7 +287,7 @@ function App() {
             </li>
             <li>
               <button 
-                onClick={() => setActiveTab('coach')} 
+                onClick={() => handleTabChange('coach')} 
                 className={`nav-item ${activeTab === 'coach' ? 'active' : ''}`}
                 style={{ width: '100%', border: 'none', background: 'none', textAlign: 'left' }}
                 aria-current={activeTab === 'coach' ? 'page' : undefined}
@@ -268,7 +298,7 @@ function App() {
             </li>
             <li>
               <button 
-                onClick={() => setActiveTab('receipt')} 
+                onClick={() => handleTabChange('receipt')} 
                 className={`nav-item ${activeTab === 'receipt' ? 'active' : ''}`}
                 style={{ width: '100%', border: 'none', background: 'none', textAlign: 'left' }}
                 aria-current={activeTab === 'receipt' ? 'page' : undefined}
@@ -283,7 +313,7 @@ function App() {
         {/* Sidebar Footer User Profile */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div className="avatar-badge" style={{ justifyContent: 'flex-start', width: '100%' }}>
-            <div className="avatar-circle">
+            <div className="avatar-circle" aria-hidden="true">
               {user.displayName ? user.displayName[0].toUpperCase() : 'U'}
             </div>
             <div className="nav-label" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -301,14 +331,14 @@ function App() {
             justifyContent: 'center',
             gap: '8px'
           }}>
-            <LogOut size={16} />
+            <LogOut size={16} aria-hidden="true" />
             <span className="nav-label">Log Out</span>
           </button>
         </div>
       </aside>
 
       {/* Main Page Panel Router */}
-      <main className="main-content">
+      <main id="main-content" className="main-content" role="main">
         {activeTab === 'dashboard' && <Dashboard user={user} />}
         {activeTab === 'coach' && <EcoCoach user={user} />}
         {activeTab === 'receipt' && <ReceiptUpload user={user} />}
